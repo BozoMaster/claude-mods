@@ -5,7 +5,7 @@
     {
       "name": "ctx",
       "source": "./plugins/ctx",
-      "description": "Context and token usage on the status line: input, output, cache read/write and cache hit"
+      "description": "Context, token usage and output speed on the status line"
     }
   ]
 }

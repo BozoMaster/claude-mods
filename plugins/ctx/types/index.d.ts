@@ -5,6 +5,7 @@ export type Tokens = {
   cacheWrite: number
   lastHit: number
   contextPct: number
+  tps: number
 }
 
 declare module 'claude-code' {
