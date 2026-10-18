@@ -1,0 +1,6 @@
+{
+  "name": "ctx",
+  "version": "0.2.0",
+  "description": "Context and token usage on the status line: input, output, cache read/write and cache hit",
+  "types": "./types/index.d.ts"
+}

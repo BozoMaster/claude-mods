@@ -1,0 +1,11 @@
+{
+  "name": "claude-mods",
+  "owner": { "name": "smitchauhan4259" },
+  "plugins": [
+    {
+      "name": "ctx",
+      "source": "./plugins/ctx",
+      "description": "Context and token usage on the status line: input, output, cache read/write and cache hit"
+    }
+  ]
+}
