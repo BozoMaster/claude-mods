@@ -23,8 +23,8 @@ first reply brings a fresh one (so it can be a little behind if you used Claude 
 meanwhile). `/clear` starts the totals over. The plan usage stays empty on API billing, and
 once a window's reset time passes it reads 0% until the next reply.
 
-In the desktop app the same figures follow the hint line under the prompt as one line of
-plain text, without color, since the app shows only that line's text.
+In the desktop app, which draws no hint line under the prompt in a local session, the same
+row, colors and all, sits in the band just above the prompt instead, giving way to a survey.
 
 Install in the desktop app: click **+** next to the prompt box, **Plugins**, **Add marketplace**
 with `BozoMaster/claude-mods`, then **Add plugin** `ctx`.

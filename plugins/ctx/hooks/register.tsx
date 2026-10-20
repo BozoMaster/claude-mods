@@ -279,14 +279,6 @@ export const register: Register = on => {
   // The engine's hint line under the prompt, then one row of figures, redrawn
   // whenever they change: tokens on the left, plan usage on the right.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
-    // The desktop app shows only the hint line's text, never a tree drawn
-    // under it, so there the figures go after the line as plain text, uncolored.
-    if (e.surface === 'desktop') {
-      const { windows, now } = await read($, limits)
-      const figures = [...parts(await read($, tokens)), ...usageParts(windows, now)]
-      return next({ ...e, props: { ...e.props, tail: `ctx ${line(figures)}` } })
-    }
-
     const hint = await next(e)
     const { Box, Text } = $.ui.resolve(e)
     const { windows, now } = await read($, limits)
@@ -316,6 +308,40 @@ export const register: Register = on => {
             </Box>
           ) : null}
         </Box>
+      </Box>
+    )
+  })
+
+  // The desktop app draws no hint line under the prompt in a local session,
+  // so there the same row goes in the band above the prompt instead, giving
+  // way to a survey. The terminal leaves the band alone.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const { windows, now } = await read($, limits)
+    const left = parts(await read($, tokens))
+    const right = usageParts(windows, now)
+
+    const draw = (ps: Part[]) =>
+      ps.map((p, i) => [
+        i > 0 ? ' · ' : '',
+        p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
+        p.note ? <Text dimColor> {p.note}</Text> : '',
+      ])
+
+    return (
+      <Box width="100%" justifyContent="space-between" gap={2}>
+        <Box flexShrink={1}>
+          <Text wrap="truncate-end">
+            <Text dimColor>ctx </Text>
+            {draw(left)}
+          </Text>
+        </Box>
+        {right.length > 0 ? (
+          <Box flexShrink={0}>
+            <Text>{draw(right)}</Text>
+          </Box>
+        ) : null}
       </Box>
     )
   })

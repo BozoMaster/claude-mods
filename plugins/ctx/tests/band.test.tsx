@@ -45,7 +45,20 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   await ui.unmount()
 })
 
-test('on the desktop: the figures follow the hint line as plain text, and no tree is drawn', async ($, on) => {
+const BAND = {
+  plugin: 'ctx',
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 20,
+    bodyColumns: 120,
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+} as const
+
+test('on the desktop: the row goes in the band above the prompt, and the terminal leaves the band alone', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc' }))
@@ -63,26 +76,28 @@ test('on the desktop: the figures follow the hint line as plain text, and no tre
   }))
   on('clock.now', () => ({ value: NOW }))
   on('clock.every', () => ({ value: undefined }))
-  const tails: (string | undefined)[] = []
-  on('ui.render', { component: 'PromptHint' }, ($, e) => {
-    tails.push(e.props.tail)
+  // Stands for the engine's own band.
+  on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
-    return <Text dimColor>{e.props.hint}</Text>
+    return <Text>engine band</Text>
   })
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  const ui = await $.ui.mount({ ...HINT, surface: 'desktop' })
 
-  expect(tails.at(-1)).toBe(
-    'ctx 85% · in 0 · out 0 · read 0 · write 0 · 0% hit · 5h 92% (2h 10m) · wk 40% (3d 4h)',
-  )
-  // Only the engine's line comes back: the terminal's row is not drawn.
-  expect(await ui.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
-  await ui.unmount()
+  const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await desk.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
+  expect((await desk.find({ type: 'Text', text: /^5h 92%$/ }))?.props.color).toBe('error')
+  expect(await desk.find({ type: 'Text', text: /^engine band$/ })).toBe(undefined)
+  await desk.unmount()
 
-  // The terminal never gets a tail: its row stays the colored tree.
-  const term = await $.ui.mount({ ...HINT, surface: 'terminal' })
-  expect(tails.at(-1)).toBe(undefined)
-  expect((await term.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
+  // A survey keeps the band.
+  const survey = await $.ui.mount({ ...BAND, props: { ...BAND.props, hasSurvey: true }, surface: 'desktop' })
+  expect(await survey.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
+  await survey.unmount()
+
+  // The terminal's band is the engine's: its row stays under the hint line.
+  const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await term.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
+  expect(await term.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
   await term.unmount()
 })
