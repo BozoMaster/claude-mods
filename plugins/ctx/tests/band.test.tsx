@@ -12,6 +12,9 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   // Nothing sits beneath the plugin: each hook here stands for the engine.
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW,

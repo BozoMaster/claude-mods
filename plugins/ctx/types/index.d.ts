@@ -7,6 +7,10 @@ export type Tokens = {
   tps: number
 }
 
+// A session's figures as $.store keeps them between runs: the totals and
+// the context fill, not the speed, which is only ever live.
+export type Saved = Omit<Tokens, 'tps'> & { savedAt: number }
+
 // One plan usage window as the last API response reported it.
 export type Limit = {
   kind: string

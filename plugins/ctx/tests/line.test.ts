@@ -1,13 +1,15 @@
 import { expect, test } from 'claude-code/testing'
 
 import {
+  asLimits,
+  asSaved,
   contextTone,
   fmt,
   hitTone,
   line,
   parts,
   rate,
-  sameWindows,
+  stale,
   until,
   usageParts,
   usageTone,
@@ -121,10 +123,30 @@ test('the countdown keeps its two largest units, drops a zero one, and rounds up
   expect(until(-5_000)).toBe('0m')
 })
 
-test('two readings are the same only when every window matches', () => {
-  const a = [{ kind: 'five_hour', percentUsed: 34, resetsAt: 'x' }]
-  expect(sameWindows(a, [{ ...a[0]! }])).toBe(true)
-  expect(sameWindows(a, [{ ...a[0]!, percentUsed: 35 }])).toBe(false)
-  expect(sameWindows(a, [])).toBe(false)
-  expect(sameWindows([], [])).toBe(true)
+test('stored figures are read back only in the right shape', () => {
+  const ok = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, contextPct: 5, savedAt: 6 }
+  expect(asSaved(ok)).toEqual(ok)
+  expect(asSaved({ ...ok, input: '1' })).toBe(undefined)
+  expect(asSaved({ ...ok, output: -1 })).toBe(undefined)
+  expect(asSaved({ ...ok, cacheRead: Number.NaN })).toBe(undefined)
+  expect(asSaved(null)).toBe(undefined)
+  expect(asSaved('x')).toBe(undefined)
+})
+
+test('stored usage windows keep only well-formed entries', () => {
+  const w = { kind: 'five_hour', percentUsed: 7, resetsAt: 'x' }
+  expect(asLimits([w, { kind: 'seven_day', percentUsed: 'a lot' }, null, { percentUsed: 3 }])).toEqual([w])
+  expect(asLimits([{ kind: 'five_hour', percentUsed: 7 }])).toEqual([{ kind: 'five_hour', percentUsed: 7 }])
+  expect(asLimits({ kind: 'five_hour' })).toEqual([])
+})
+
+test('pruning keeps the newest sessions and names the rest', () => {
+  const saved = [
+    { key: 'a', savedAt: 1 },
+    { key: 'b', savedAt: 3 },
+    { key: 'c', savedAt: 2 },
+  ]
+  expect(stale(saved, 2)).toEqual(['a'])
+  expect(stale(saved, 3)).toEqual([])
+  expect(stale(saved, 0)).toEqual(['b', 'c', 'a'])
 })

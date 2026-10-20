@@ -1,16 +1,11 @@
 import { atom, read, update } from 'claude-code'
-import type { Register } from 'claude-code'
+import type { EngineInterface as Engine, Register } from 'claude-code'
 
-import type { Limit, Limits, Tokens } from '../types'
+import type { Limit, Limits, Saved, Tokens } from '../types'
 
-const tokens = atom({ plugin: 'ctx', key: 'tokens' } as const, {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  contextPct: 0,
-  tps: 0,
-} as Tokens)
+const ZERO: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextPct: 0, tps: 0 }
+
+const tokens = atom({ plugin: 'ctx', key: 'tokens' } as const, ZERO)
 
 const limits = atom({ plugin: 'ctx', key: 'limits' } as const, {
   windows: [],
@@ -29,6 +24,13 @@ const HIT_MIN_PROMPT = 50_000
 
 // The plan's usage windows, in the order drawn, by the names the API reports.
 const WINDOWS: Record<string, string> = { five_hour: '5h', seven_day: 'wk' }
+
+// $.store keys: each session's figures under its own key, so two sessions
+// running at once never write over each other, and the account's last
+// usage reading. Only the most recently saved sessions are kept.
+const SESSION_KEY = 'session:'
+const LIMITS_KEY = 'limits'
+const KEEP_SESSIONS = 20
 
 // Rounded first, so 999,950 reads 1.0M and never 1000.0k.
 export function fmt(n: number): string {
@@ -89,7 +91,7 @@ export function parts(t: Tokens): Part[] {
 }
 
 // The 5-hour window, then the week: how much of each is used and, dimmed,
-// the time until it resets. Nothing until the first API response reports
+// the time until it resets. Nothing until a response or the store reports
 // them, or ever off a subscription. A window whose reset has passed is
 // fresh, though no response has said so yet.
 export function usageParts(windows: Limit[], now: number): Part[] {
@@ -114,15 +116,80 @@ export function line(ps: Part[]): string {
   return ps.map(p => (p.note ? `${p.text} ${p.note}` : p.text)).join(' · ')
 }
 
-// Whether two readings would draw the same windows.
-export function sameWindows(a: Limit[], b: Limit[]): boolean {
-  return (
-    a.length === b.length &&
-    a.every(
-      (w, i) =>
-        w.kind === b[i]?.kind && w.percentUsed === b[i]?.percentUsed && w.resetsAt === b[i]?.resetsAt,
-    )
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
+
+// What the store holds is a file on disk: read back only what has the right shape.
+export function asSaved(v: unknown): Saved | undefined {
+  if (typeof v !== 'object' || v === null) return undefined
+  const s = v as Record<string, unknown>
+  const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'contextPct', 'savedAt'] as const
+  return fields.every(f => isCount(s[f])) ? (s as Saved) : undefined
+}
+
+export function asLimits(v: unknown): Limit[] {
+  if (!Array.isArray(v)) return []
+  return v.filter(
+    (l): l is Limit =>
+      typeof l === 'object' &&
+      l !== null &&
+      typeof l.kind === 'string' &&
+      isCount(l.percentUsed) &&
+      (l.resetsAt === undefined || typeof l.resetsAt === 'string'),
   )
+}
+
+// The keys of the sessions past the newest `keep`, oldest first.
+export function stale(saved: { key: string; savedAt: number }[], keep: number): string[] {
+  return [...saved]
+    .sort((a, b) => b.savedAt - a.savedAt)
+    .slice(keep)
+    .map(s => s.key)
+}
+
+// The session the figures in state belong to, and the last figures stored
+// for each, so a save that would change nothing is skipped.
+let loadedId: string | undefined
+const lastSaved = new Map<string, string>()
+
+async function load($: Engine, id: string) {
+  const saved = asSaved(await $.store.get(SESSION_KEY + id))
+  const figures = saved
+    ? {
+        input: saved.input,
+        output: saved.output,
+        cacheRead: saved.cacheRead,
+        cacheWrite: saved.cacheWrite,
+        contextPct: saved.contextPct,
+      }
+    : {}
+  await update($, tokens, () => ({ ...ZERO, ...figures }))
+  loadedId = id
+}
+
+// A /clear or an in-app resume goes on under another session id with no
+// session.start: the first event that sees the new id loads its figures.
+async function follow($: Engine) {
+  const id = await $.session.id()
+  if (id !== loadedId) await load($, id)
+}
+
+async function save($: Engine, id: string) {
+  if (id !== loadedId) return
+  const { tps, ...figures } = await read($, tokens)
+  const text = JSON.stringify(figures)
+  if (lastSaved.get(id) === text) return
+  await $.store.set(SESSION_KEY + id, { ...figures, savedAt: await $.clock.now() })
+  lastSaved.set(id, text)
+}
+
+// The session that is open is never pruned, however long ago it was saved.
+async function prune($: Engine, id: string) {
+  const keys = (await $.store.keys()).filter(k => k.startsWith(SESSION_KEY) && k !== SESSION_KEY + id)
+  if (keys.length < KEEP_SESSIONS) return
+  const saved = await Promise.all(
+    keys.map(async key => ({ key, savedAt: asSaved(await $.store.get(key))?.savedAt ?? 0 })),
+  )
+  for (const key of stale(saved, KEEP_SESSIONS - 1)) await $.store.delete(key)
 }
 
 export const register: Register = on => {
@@ -130,26 +197,42 @@ export const register: Register = on => {
     // Earlier versions pinned the figures as a status line, which cannot be
     // colored; they now live under the prompt's hint line instead.
     $.ui.status(undefined)
+    const id = await $.session.id()
+    // A hot reload keeps the session's state, which is newer than the store.
+    const t = await read($, tokens)
+    if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
+    else await load($, id)
+
+    // A resumed session has no fill until its first response; its stored one
+    // stands in. The plan's usage is the account's, so the last stored reading
+    // does for any session until a response brings a new one.
     const { context, rateLimits } = await $.session.usage()
+    if (context.percent !== undefined) {
+      await update($, tokens, t => ({ ...t, contextPct: context.percent ?? t.contextPct }))
+    }
+    const windows = rateLimits.length > 0 ? rateLimits : asLimits(await $.store.get(LIMITS_KEY))
     const now = await $.clock.now()
-    await update($, tokens, t => ({ ...t, contextPct: context.percent ?? t.contextPct }))
-    await update($, limits, () => ({ windows: rateLimits, now }))
-    // The windows only change with an API response; once a minute the clock
-    // moves on, so the countdowns do too while the session sits idle.
+    await update($, limits, () => ({ windows, now }))
+
+    // The windows change with responses; once a minute the clock moves on,
+    // so the countdowns do too while the session sits idle.
     $.clock.every(60_000, async () => {
+      await follow($)
       const now = await $.clock.now()
       await update($, limits, l => ({ ...l, now }))
     })
+    await prune($, id)
     return next(e)
   })
 
   // Every model request of a turn, the main loop's and subagents' alike.
   on('turn.step', async function* ($, e, next) {
+    await follow($)
     const startedAt = await $.clock.now()
     const step = yield* next(e)
-    const now = await $.clock.now()
     const usage = step.usage
     if (usage) {
+      const elapsed = (await $.clock.now()) - startedAt
       await update($, tokens, t => ({
         ...t,
         input: t.input + usage.input_tokens,
@@ -157,19 +240,38 @@ export const register: Register = on => {
         cacheRead: t.cacheRead + usage.cache_read_input_tokens,
         cacheWrite: t.cacheWrite + usage.cache_creation_input_tokens,
         // A short or empty step keeps the last reading instead of blanking it.
-        tps: rate(usage.output_tokens, now - startedAt) || t.tps,
+        tps: rate(usage.output_tokens, elapsed) || t.tps,
       }))
-      // Each API response carries the plan's latest usage; redraw only when it moved.
-      const { rateLimits } = await $.session.usage()
-      if (!sameWindows(rateLimits, (await read($, limits)).windows)) {
-        await update($, limits, () => ({ windows: rateLimits, now }))
-      }
     }
     return step
   })
 
+  // After each main-thread turn, and when a usage window moves a whole point.
   on('session.measure', async ($, e, next) => {
-    await update($, tokens, t => ({ ...t, contextPct: e.context.percent ?? t.contextPct }))
+    await follow($)
+    if (e.context.percent !== undefined) {
+      await update($, tokens, t => ({ ...t, contextPct: e.context.percent ?? t.contextPct }))
+    }
+    if (e.changed.includes('rateLimits') && e.rateLimits.length > 0) {
+      const now = await $.clock.now()
+      await update($, limits, () => ({ windows: e.rateLimits, now }))
+      await $.store.set(LIMITS_KEY, e.rateLimits)
+    }
+    return next(e)
+  })
+
+  // Saved once a main-thread turn ends rather than on every request.
+  on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) await save($, await $.session.id())
+    return next(e)
+  })
+
+  // Saved as the session ends too: exit, /clear, a resume. The process goes
+  // on under the next session after a /clear or a resume, whose figures load
+  // a moment later rather than the old ones standing until its first request.
+  on('session.end', async ($, e, next) => {
+    await save($, e.sessionId)
+    if (e.reason === 'clear' || e.reason === 'resume') $.clock.after(1_000, () => follow($))
     return next(e)
   })
 
