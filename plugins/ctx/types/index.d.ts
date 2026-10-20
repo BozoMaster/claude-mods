@@ -3,7 +3,6 @@ export type Tokens = {
   output: number
   cacheRead: number
   cacheWrite: number
-  lastHit: number
   contextPct: number
   tps: number
 }
@@ -15,11 +14,11 @@ export type Limit = {
   resetsAt?: string
 }
 
-// The plan's usage windows and when they were read, so a countdown to each
-// reset can be drawn from it.
+// The plan's usage windows, and the time the countdowns to each reset are
+// drawn from, moved on once a minute.
 export type Limits = {
   windows: Limit[]
-  readAt: number
+  now: number
 }
 
 declare module 'claude-code' {

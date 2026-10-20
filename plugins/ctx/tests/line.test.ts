@@ -1,8 +1,19 @@
 import { expect, test } from 'claude-code/testing'
 
-import { contextTone, hitTone, line, parts, rate, until, usageParts, usageTone } from '../hooks/register'
+import {
+  contextTone,
+  fmt,
+  hitTone,
+  line,
+  parts,
+  rate,
+  sameWindows,
+  until,
+  usageParts,
+  usageTone,
+} from '../hooks/register'
 
-const EMPTY = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, lastHit: 0, contextPct: 0, tps: 0 }
+const EMPTY = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextPct: 0, tps: 0 }
 
 const NOW = Date.parse('2026-10-20T12:00:00Z')
 
@@ -13,7 +24,6 @@ test('the line reads the totals, the speed and the cache hit', () => {
       output: 4100,
       cacheRead: 1_500_000,
       cacheWrite: 80_000,
-      lastHit: 97,
       contextPct: 13,
       tps: 62,
     }),
@@ -25,6 +35,14 @@ test('an empty session shows zeros, not NaN, and no speed yet', () => {
   const text = line(parts(EMPTY))
   expect(text).toContain('0% hit')
   expect(text).not.toContain('tps')
+})
+
+test('token counts round into the next unit rather than reading 1000.0k', () => {
+  expect(fmt(999)).toBe('999')
+  expect(fmt(1_000)).toBe('1.0k')
+  expect(fmt(999_949)).toBe('999.9k')
+  expect(fmt(999_950)).toBe('1.0M')
+  expect(fmt(2_345_678)).toBe('2.3M')
 })
 
 test('rate is output tokens over seconds, and ignores steps too short to measure', () => {
@@ -54,7 +72,7 @@ test('only the figures that matter carry a tone', () => {
   ])
 })
 
-test('plan usage reads the 5-hour window, then the week: time left, then used', () => {
+test('plan usage reads the 5-hour window, then the week, each with the time to its reset', () => {
   const text = line(
     usageParts(
       [
@@ -64,24 +82,49 @@ test('plan usage reads the 5-hour window, then the week: time left, then used', 
       NOW,
     ),
   )
-  expect(text).toBe('2h10m 34% · 3d4h 61%')
+  expect(text).toBe('5h 34% (2h 10m) · wk 61% (3d 4h)')
 })
 
 test('plan usage is empty off a subscription, and a window with no reset has no countdown', () => {
   expect(usageParts([], NOW)).toEqual([])
-  expect(line(usageParts([{ kind: 'five_hour', percentUsed: 12 }], NOW))).toBe('12%')
+  expect(line(usageParts([{ kind: 'five_hour', percentUsed: 12 }], NOW))).toBe('5h 12%')
+  expect(line(usageParts([{ kind: 'five_hour', percentUsed: 12, resetsAt: 'soon' }], NOW))).toBe('5h 12%')
   expect(usageParts([{ kind: 'spend_limit', percentUsed: 50 }], NOW)).toEqual([])
 })
 
+test('a window whose reset has passed reads fresh, not its old figure', () => {
+  const ps = usageParts([{ kind: 'five_hour', percentUsed: 95, resetsAt: '2026-10-20T11:59:00Z' }], NOW)
+  expect(ps).toEqual([{ text: '5h 0%' }])
+})
+
 test('plan usage is plain below 75%, a warning from 75% and an error from 90%', () => {
-  expect(usageTone(74.9)).toBe(undefined)
+  expect(usageTone(74)).toBe(undefined)
   expect(usageTone(75)).toBe('warning')
   expect(usageTone(90)).toBe('error')
 })
 
-test('the countdown keeps its two largest units and never goes negative', () => {
+test('the color follows the percent drawn, so 74.6 reads 75% and warns', () => {
+  const resetsAt = '2026-10-20T14:00:00Z'
+  const [warn] = usageParts([{ kind: 'five_hour', percentUsed: 74.6, resetsAt }], NOW)
+  expect(warn).toEqual({ text: '5h 75%', tone: 'warning', note: '(2h)' })
+  const [error] = usageParts([{ kind: 'seven_day', percentUsed: 89.6, resetsAt }], NOW)
+  expect(error?.tone).toBe('error')
+})
+
+test('the countdown keeps its two largest units, drops a zero one, and rounds up', () => {
   expect(until(42 * 60_000)).toBe('42m')
-  expect(until((2 * 60 + 10) * 60_000)).toBe('2h10m')
-  expect(until((3 * 24 + 4) * 3_600_000)).toBe('3d4h')
+  expect(until(20_000)).toBe('1m')
+  expect(until((2 * 60 + 10) * 60_000)).toBe('2h 10m')
+  expect(until(60 * 60_000)).toBe('1h')
+  expect(until((3 * 24 + 4) * 3_600_000)).toBe('3d 4h')
+  expect(until(3 * 24 * 3_600_000)).toBe('3d')
   expect(until(-5_000)).toBe('0m')
+})
+
+test('two readings are the same only when every window matches', () => {
+  const a = [{ kind: 'five_hour', percentUsed: 34, resetsAt: 'x' }]
+  expect(sameWindows(a, [{ ...a[0]! }])).toBe(true)
+  expect(sameWindows(a, [{ ...a[0]!, percentUsed: 35 }])).toBe(false)
+  expect(sameWindows(a, [])).toBe(false)
+  expect(sameWindows([], [])).toBe(true)
 })
