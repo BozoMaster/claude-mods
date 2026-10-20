@@ -1,5 +1,4 @@
 import { expect, test } from 'claude-code/testing'
-import type { TestBody } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 const HINT = {
@@ -27,12 +26,8 @@ const USAGE = {
 // refused so they never run on their own.
 type Window = { kind: string; percentUsed: number; resetsAt?: string }
 
-function engine(
-  on: On,
-  session: { id: string; percent?: number; rateLimits?: Window[]; surfaces?: ('terminal' | 'desktop')[] },
-) {
+function engine(on: On, session: { id: string; percent?: number; rateLimits?: Window[] }) {
   const store = new Map<string, unknown>()
-  const statuses: (string | undefined)[] = []
   const writes = new Map<string, number>()
   on('store.get', (_, e) => ({ value: store.get(e.key) }))
   on('store.set', (_, e) => {
@@ -46,11 +41,7 @@ function engine(
     return { value: undefined }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.status', (_, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  on('session.surfaces', () => ({ value: session.surfaces ?? ['terminal'] }))
+  on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: session.id }))
   on('session.usage', () => ({
     value: {
@@ -68,12 +59,11 @@ function engine(
   on('turn.complete', () => ({ text: '' }))
   on('session.end', (_, e) => ({ sessionId: e.sessionId }))
   on('session.measure', (_, e) => ({ changed: e.changed }))
-  on('session.attach', (_, e) => ({ clientId: e.clientId }))
   on('ui.render', { component: 'PromptHint' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
     return <Text dimColor>{e.props.hint}</Text>
   })
-  return { store, writes, statuses }
+  return { store, writes }
 }
 
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
@@ -241,54 +231,3 @@ test('the store keeps the 20 most recently saved sessions and leaves the usage r
   expect(kept).toContain('session:s4')
   expect(store.has('limits')).toBe(true)
 })
-
-const DESKTOP_START = { cwd: '/', surface: null, isInteractive: false } as const
-
-async function turn($: Parameters<TestBody>[0], percent: number) {
-  for await (const _ of $.turn.step(STEP)) {
-    // drain
-  }
-  await $.session.measure({ context: { window: 1_000_000, percent }, rateLimits: [], changed: ['context'] })
-}
-
-test('a session only the desktop draws has the figures on its status line, each change once', async ($, on) => {
-  const { statuses } = engine(on, { id: 'desk', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK] })
-
-  await $.session.start(DESKTOP_START)
-  expect(statuses).toEqual([
-    undefined,
-    '0% · in 0 · out 0 · read 0 · write 0 · 0% hit · 5h 7% (4h 10m) · wk 11% (3d 3h)',
-  ])
-
-  await turn($, 12)
-  expect(statuses.slice(2)).toEqual([
-    '0% · in 2 · out 200 · read 120.0k · write 1.0k · 99% hit · 5h 7% (4h 10m) · wk 11% (3d 3h)',
-    '12% · in 2 · out 200 · read 120.0k · write 1.0k · 99% hit · 5h 7% (4h 10m) · wk 11% (3d 3h)',
-  ])
-
-  // Nothing moved: the line is not set again.
-  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['cost'] })
-  expect(statuses).toHaveLength(4)
-})
-
-test('the status line is drawn once the desktop attaches after the session starts', async ($, on) => {
-  const surfaces: ('terminal' | 'desktop')[] = []
-  const { statuses } = engine(on, { id: 'late', surfaces })
-
-  await $.session.start(DESKTOP_START)
-  expect(statuses).toEqual([undefined])
-
-  surfaces.push('desktop')
-  await $.session.attach({ surface: 'desktop', clientId: 'app' })
-  expect(statuses).toEqual([undefined, '0% · in 0 · out 0 · read 0 · write 0 · 0% hit'])
-})
-
-for (const surfaces of [['terminal'], ['terminal', 'desktop']] as const) {
-  test(`a terminal session never sets the status line (${surfaces.join(' and ')} attached)`, async ($, on) => {
-    const { statuses } = engine(on, { id: 'term', surfaces: [...surfaces] })
-    await $.session.start(START)
-    await turn($, 12)
-    await $.session.attach({ surface: 'desktop', clientId: 'app' })
-    expect(statuses).toEqual([undefined])
-  })
-}

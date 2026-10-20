@@ -24,9 +24,7 @@ meanwhile). `/clear` starts the totals over. The plan usage stays empty on API b
 once a window's reset time passes it reads 0% until the next reply.
 
 In the desktop app, which draws no hint line under the prompt in a local session, the same
-figures sit in the footer under the prompt as the mod's status line, plain text across the
-room between the mode and model pickers, and, colors and all, in the band just above the
-prompt, which gives way to a survey. A terminal session never sets the status line.
+row, colors and all, sits in the band just above the prompt instead, giving way to a survey.
 
 Install in the desktop app: click **+** next to the prompt box, **Plugins**, **Add marketplace**
 with `BozoMaster/claude-mods`, then **Add plugin** `ctx`.

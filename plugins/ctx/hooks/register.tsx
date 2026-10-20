@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { ElementConstructor, EngineInterface as Engine, Register, TextProps } from 'claude-code'
+import type { EngineInterface as Engine, Register } from 'claude-code'
 
 import type { Limit, Limits, Saved, Tokens } from '../types'
 
@@ -116,16 +116,6 @@ export function line(ps: Part[]): string {
   return ps.map(p => (p.note ? `${p.text} ${p.note}` : p.text)).join(' · ')
 }
 
-// The desktop app's figures, joined by dots: a figure worth a look in its
-// color, a note after it dimmed.
-function drawParts(Text: ElementConstructor<TextProps>, ps: Part[]) {
-  return ps.map((p, i) => [
-    i > 0 ? ' · ' : '',
-    p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
-    p.note ? <Text dimColor> {p.note}</Text> : '',
-  ])
-}
-
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
 // What the store holds is a file on disk: read back only what has the right shape.
@@ -161,21 +151,6 @@ export function stale(saved: { key: string; savedAt: number }[], keep: number): 
 let loadedId: string | undefined
 const lastSaved = new Map<string, string>()
 
-// The desktop app's footer under the prompt gives a plugin's status line the
-// room from the mode picker to the model picker, where a drawn chip gets 24
-// columns: in a session only the desktop draws, the figures go there as one
-// line of text, after the plugin's name. A terminal's status line is left alone.
-let lastStatus: string | undefined
-async function status($: Engine) {
-  const surfaces = await $.session.surfaces()
-  if (!surfaces.includes('desktop') || surfaces.includes('terminal')) return
-  const { windows, now } = await read($, limits)
-  const text = line([...parts(await read($, tokens)), ...usageParts(windows, now)])
-  if (text === lastStatus) return
-  $.ui.status(text)
-  lastStatus = text
-}
-
 // Loads a session's figures into state, which starts empty for every
 // session: its stored totals, the context fill (the live one where the
 // engine has it, else the stored one), and the plan's usage as the engine
@@ -198,7 +173,6 @@ async function load($: Engine, id: string, livePct?: number) {
   const now = await $.clock.now()
   await update($, limits, () => ({ windows, now }))
   loadedId = id
-  await status($)
 }
 
 // A /clear or an in-app resume goes on under another session id with no
@@ -234,19 +208,15 @@ async function prune($: Engine, id: string) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // Earlier versions pinned the figures as a status line, which cannot be
-    // colored; on the terminal they now live under the prompt's hint line,
-    // and only a session the desktop app alone draws sets it (see status).
+    // colored; they now live under the prompt's hint line instead.
     $.ui.status(undefined)
-    lastStatus = undefined
     const id = await $.session.id()
     // A hot reload keeps the session's state, which is newer than the store.
     // Otherwise a resumed session has no fill until its first response, so
     // its stored one stands in.
     const t = await read($, tokens)
-    if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) {
-      loadedId = id
-      await status($)
-    } else await load($, id, (await $.session.usage()).context.percent)
+    if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
+    else await load($, id, (await $.session.usage()).context.percent)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
@@ -254,7 +224,6 @@ export const register: Register = on => {
       await follow($)
       const now = await $.clock.now()
       await update($, limits, l => ({ ...l, now }))
-      await status($)
     })
     await prune($, id)
     return next(e)
@@ -277,7 +246,6 @@ export const register: Register = on => {
         // A short or empty step keeps the last reading instead of blanking it.
         tps: rate(usage.output_tokens, elapsed) || t.tps,
       }))
-      await status($)
     }
     return step
   })
@@ -296,16 +264,7 @@ export const register: Register = on => {
       await $.store.set(LIMITS_KEY, e.rateLimits)
     }
     await save($, await $.session.id())
-    await status($)
     return next(e)
-  })
-
-  // The desktop app attaches after the session starts: its status line is
-  // drawn as soon as it does.
-  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
-    const result = await next(e)
-    await status($)
-    return result
   })
 
   // Saved as the session ends too: exit, /clear, a resume. The process goes
@@ -363,17 +322,24 @@ export const register: Register = on => {
     const left = parts(await read($, tokens))
     const right = usageParts(windows, now)
 
+    const draw = (ps: Part[]) =>
+      ps.map((p, i) => [
+        i > 0 ? ' · ' : '',
+        p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
+        p.note ? <Text dimColor> {p.note}</Text> : '',
+      ])
+
     return (
       <Box width="100%" justifyContent="space-between" gap={2}>
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             <Text dimColor>ctx </Text>
-            {drawParts(Text, left)}
+            {draw(left)}
           </Text>
         </Box>
         {right.length > 0 ? (
           <Box flexShrink={0}>
-            <Text>{drawParts(Text, right)}</Text>
+            <Text>{draw(right)}</Text>
           </Box>
         ) : null}
       </Box>

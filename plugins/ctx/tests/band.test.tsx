@@ -12,7 +12,6 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   // Nothing sits beneath the plugin: each hook here stands for the engine.
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
-  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'abc' }))
   on('store.get', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
@@ -62,7 +61,6 @@ const BAND = {
 test('on the desktop: the row goes in the band above the prompt, and the terminal leaves the band alone', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
-  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'abc' }))
   on('store.get', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
