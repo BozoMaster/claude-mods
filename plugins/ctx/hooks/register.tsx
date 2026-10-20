@@ -161,6 +161,21 @@ export function stale(saved: { key: string; savedAt: number }[], keep: number): 
 let loadedId: string | undefined
 const lastSaved = new Map<string, string>()
 
+// The desktop app's footer under the prompt gives a plugin's status line the
+// room from the mode picker to the model picker, where a drawn chip gets 24
+// columns: in a session only the desktop draws, the figures go there as one
+// line of text, after the plugin's name. A terminal's status line is left alone.
+let lastStatus: string | undefined
+async function status($: Engine) {
+  const surfaces = await $.session.surfaces()
+  if (!surfaces.includes('desktop') || surfaces.includes('terminal')) return
+  const { windows, now } = await read($, limits)
+  const text = line([...parts(await read($, tokens)), ...usageParts(windows, now)])
+  if (text === lastStatus) return
+  $.ui.status(text)
+  lastStatus = text
+}
+
 // Loads a session's figures into state, which starts empty for every
 // session: its stored totals, the context fill (the live one where the
 // engine has it, else the stored one), and the plan's usage as the engine
@@ -183,6 +198,7 @@ async function load($: Engine, id: string, livePct?: number) {
   const now = await $.clock.now()
   await update($, limits, () => ({ windows, now }))
   loadedId = id
+  await status($)
 }
 
 // A /clear or an in-app resume goes on under another session id with no
@@ -218,15 +234,19 @@ async function prune($: Engine, id: string) {
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
     // Earlier versions pinned the figures as a status line, which cannot be
-    // colored; they now live under the prompt's hint line instead.
+    // colored; on the terminal they now live under the prompt's hint line,
+    // and only a session the desktop app alone draws sets it (see status).
     $.ui.status(undefined)
+    lastStatus = undefined
     const id = await $.session.id()
     // A hot reload keeps the session's state, which is newer than the store.
     // Otherwise a resumed session has no fill until its first response, so
     // its stored one stands in.
     const t = await read($, tokens)
-    if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
-    else await load($, id, (await $.session.usage()).context.percent)
+    if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) {
+      loadedId = id
+      await status($)
+    } else await load($, id, (await $.session.usage()).context.percent)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
@@ -234,6 +254,7 @@ export const register: Register = on => {
       await follow($)
       const now = await $.clock.now()
       await update($, limits, l => ({ ...l, now }))
+      await status($)
     })
     await prune($, id)
     return next(e)
@@ -256,6 +277,7 @@ export const register: Register = on => {
         // A short or empty step keeps the last reading instead of blanking it.
         tps: rate(usage.output_tokens, elapsed) || t.tps,
       }))
+      await status($)
     }
     return step
   })
@@ -274,7 +296,16 @@ export const register: Register = on => {
       await $.store.set(LIMITS_KEY, e.rateLimits)
     }
     await save($, await $.session.id())
+    await status($)
     return next(e)
+  })
+
+  // The desktop app attaches after the session starts: its status line is
+  // drawn as soon as it does.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    const result = await next(e)
+    await status($)
+    return result
   })
 
   // Saved as the session ends too: exit, /clear, a resume. The process goes
@@ -345,27 +376,6 @@ export const register: Register = on => {
             <Text>{drawParts(Text, right)}</Text>
           </Box>
         ) : null}
-      </Box>
-    )
-  })
-
-  // The desktop app's footer under the prompt, beside the model picker: the
-  // figures on one line, then the engine's mode labels, if any. The terminal's
-  // footer is left alone.
-  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
-    if (e.surface !== 'desktop') return next(e)
-    const modes = await next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const { windows, now } = await read($, limits)
-    const figures = [...parts(await read($, tokens)), ...usageParts(windows, now)]
-
-    return (
-      <Box gap={2}>
-        <Text>
-          <Text dimColor>ctx </Text>
-          {drawParts(Text, figures)}
-        </Text>
-        {e.props.modes.length > 0 ? modes : null}
       </Box>
     )
   })
