@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register } from 'claude-code'
+import type { ElementConstructor, EngineInterface as Engine, Register, TextProps } from 'claude-code'
 
 import type { Limit, Limits, Saved, Tokens } from '../types'
 
@@ -114,6 +114,16 @@ export function usageParts(windows: Limit[], now: number): Part[] {
 
 export function line(ps: Part[]): string {
   return ps.map(p => (p.note ? `${p.text} ${p.note}` : p.text)).join(' · ')
+}
+
+// The desktop app's figures, joined by dots: a figure worth a look in its
+// color, a note after it dimmed.
+function drawParts(Text: ElementConstructor<TextProps>, ps: Part[]) {
+  return ps.map((p, i) => [
+    i > 0 ? ' · ' : '',
+    p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
+    p.note ? <Text dimColor> {p.note}</Text> : '',
+  ])
 }
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
@@ -322,26 +332,40 @@ export const register: Register = on => {
     const left = parts(await read($, tokens))
     const right = usageParts(windows, now)
 
-    const draw = (ps: Part[]) =>
-      ps.map((p, i) => [
-        i > 0 ? ' · ' : '',
-        p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
-        p.note ? <Text dimColor> {p.note}</Text> : '',
-      ])
-
     return (
       <Box width="100%" justifyContent="space-between" gap={2}>
         <Box flexShrink={1}>
           <Text wrap="truncate-end">
             <Text dimColor>ctx </Text>
-            {draw(left)}
+            {drawParts(Text, left)}
           </Text>
         </Box>
         {right.length > 0 ? (
           <Box flexShrink={0}>
-            <Text>{draw(right)}</Text>
+            <Text>{drawParts(Text, right)}</Text>
           </Box>
         ) : null}
+      </Box>
+    )
+  })
+
+  // The desktop app's footer under the prompt, beside the model picker: the
+  // figures on one line, then the engine's mode labels, if any. The terminal's
+  // footer is left alone.
+  on('ui.render', { component: 'SessionMode' }, async ($, e, next) => {
+    if (e.surface !== 'desktop') return next(e)
+    const modes = await next(e)
+    const { Box, Text } = $.ui.resolve(e)
+    const { windows, now } = await read($, limits)
+    const figures = [...parts(await read($, tokens)), ...usageParts(windows, now)]
+
+    return (
+      <Box gap={2}>
+        <Text>
+          <Text dimColor>ctx </Text>
+          {drawParts(Text, figures)}
+        </Text>
+        {e.props.modes.length > 0 ? modes : null}
       </Box>
     )
   })
