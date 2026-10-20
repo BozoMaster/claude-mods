@@ -44,3 +44,45 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   expect((await ui.find({ type: 'Text', text: /wk 40% \(3d 4h\)/ }))?.text).toContain('5h 92% (2h 10m)')
   await ui.unmount()
 })
+
+test('on the desktop: the figures follow the hint line as plain text, and no tree is drawn', async ($, on) => {
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.status', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: NOW,
+      context: { tokens: 850_000, window: 1_000_000, percent: 85 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: 92, resetsAt: '2026-10-20T14:10:00Z' },
+        { kind: 'seven_day', percentUsed: 40, resetsAt: '2026-10-23T16:00:00Z' },
+      ],
+    },
+  }))
+  on('clock.now', () => ({ value: NOW }))
+  on('clock.every', () => ({ value: undefined }))
+  const tails: (string | undefined)[] = []
+  on('ui.render', { component: 'PromptHint' }, ($, e) => {
+    tails.push(e.props.tail)
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>{e.props.hint}</Text>
+  })
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount({ ...HINT, surface: 'desktop' })
+
+  expect(tails.at(-1)).toBe(
+    'ctx 85% · in 0 · out 0 · read 0 · write 0 · 0% hit · 5h 92% (2h 10m) · wk 40% (3d 4h)',
+  )
+  // Only the engine's line comes back: the terminal's row is not drawn.
+  expect(await ui.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
+  await ui.unmount()
+
+  // The terminal never gets a tail: its row stays the colored tree.
+  const term = await $.ui.mount({ ...HINT, surface: 'terminal' })
+  expect(tails.at(-1)).toBe(undefined)
+  expect((await term.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
+  await term.unmount()
+})

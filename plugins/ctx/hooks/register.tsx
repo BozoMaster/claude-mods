@@ -279,6 +279,14 @@ export const register: Register = on => {
   // The engine's hint line under the prompt, then one row of figures, redrawn
   // whenever they change: tokens on the left, plan usage on the right.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
+    // The desktop app shows only the hint line's text, never a tree drawn
+    // under it, so there the figures go after the line as plain text, uncolored.
+    if (e.surface === 'desktop') {
+      const { windows, now } = await read($, limits)
+      const figures = [...parts(await read($, tokens)), ...usageParts(windows, now)]
+      return next({ ...e, props: { ...e.props, tail: `ctx ${line(figures)}` } })
+    }
+
     const hint = await next(e)
     const { Box, Text } = $.ui.resolve(e)
     const { windows, now } = await read($, limits)

@@ -1,6 +1,6 @@
 {
   "name": "ctx",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Context, token usage and plan usage in a row under the prompt: input, output, tokens per second, cache read/write and cache hit on the left, percent used of the 5-hour and weekly limits and the time to each reset on the right, with only what needs a look in color",
   "types": "./types/index.d.ts"
 }
