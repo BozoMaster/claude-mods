@@ -120,7 +120,7 @@ test('a live fill wins over the stored one, and a stored file of the wrong shape
   await ui.unmount()
 })
 
-test('a turn saves its totals once, and an unchanged turn writes nothing', async ($, on) => {
+test('the figures are saved once the turn is measured, and an unchanged turn writes nothing', async ($, on) => {
   const { store, writes } = engine(on, { id: 'abc' })
 
   await $.session.start(START)
@@ -128,21 +128,47 @@ test('a turn saves its totals once, and an unchanged turn writes nothing', async
   for await (const _ of s) {
     // drain
   }
-  await $.turn.complete(COMPLETE)
+  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['context'] })
   expect(writes.get('session:abc')).toBe(1)
   expect(store.get('session:abc')).toEqual({
     input: 2,
     output: 200,
     cacheRead: 120_000,
     cacheWrite: 1_000,
-    contextPct: 0,
+    contextPct: 12,
     savedAt: NOW,
   })
 
-  // Nothing new since: no second write. A subagent's end never saves.
-  await $.turn.complete(COMPLETE)
-  await $.turn.complete({ ...COMPLETE, agentId: 'a1' })
+  // Nothing new since: no second write.
+  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['cost'] })
   expect(writes.get('session:abc')).toBe(1)
+})
+
+test('a session that never had a request is not saved', async ($, on) => {
+  const { store } = engine(on, { id: 'empty' })
+  await $.session.start(START)
+  await $.session.measure({ context: { window: 1_000_000 }, rateLimits: [], changed: ['cost'] })
+  await $.session.end({ reason: 'prompt_input_exit', sessionId: 'empty', resume: { id: 'empty' } })
+  expect(store.has('session:empty')).toBe(false)
+})
+
+test('an in-app resume brings back the new session and reloads the usage', async ($, on) => {
+  // The session opens with no usage reading anywhere, as the state of a
+  // session switched to does; one is stored by the time of the switch.
+  const session = { id: 'fresh' }
+  const { store } = engine(on, session)
+  store.set('session:old', { input: 2, output: 242, cacheRead: 130_300, cacheWrite: 1_100, contextPct: 13, savedAt: NOW })
+
+  await $.session.start(START)
+  await $.session.end({ reason: 'resume', sessionId: 'fresh', resume: { id: 'fresh' } })
+  store.set('limits', [FIVE_HOUR, WEEK])
+  session.id = 'old'
+  await $.session.measure({ context: { window: 1_000_000, percent: 50 }, rateLimits: [], changed: ['cost'] })
+
+  const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
+  expect(await row(ui, /^ctx /)).toBe('ctx 50% · in 2 · out 242 · read 130.3k · write 1.1k · 99% hit')
+  expect(await row(ui, /^5h /)).toBe('5h 7% (4h 10m) · wk 11% (3d 3h)')
+  await ui.unmount()
 })
 
 test('/clear saves the old session and the next one starts from zero', async ($, on) => {

@@ -151,7 +151,11 @@ export function stale(saved: { key: string; savedAt: number }[], keep: number): 
 let loadedId: string | undefined
 const lastSaved = new Map<string, string>()
 
-async function load($: Engine, id: string) {
+// Loads a session's figures into state, which starts empty for every
+// session: its stored totals, the context fill (the live one where the
+// engine has it, else the stored one), and the plan's usage as the engine
+// last read it, else the stored reading, the account's whatever the session.
+async function load($: Engine, id: string, livePct?: number) {
   const saved = asSaved(await $.store.get(SESSION_KEY + id))
   const figures = saved
     ? {
@@ -159,15 +163,22 @@ async function load($: Engine, id: string) {
         output: saved.output,
         cacheRead: saved.cacheRead,
         cacheWrite: saved.cacheWrite,
-        contextPct: saved.contextPct,
       }
     : {}
-  await update($, tokens, () => ({ ...ZERO, ...figures }))
+  const contextPct = livePct ?? saved?.contextPct ?? 0
+  await update($, tokens, () => ({ ...ZERO, ...figures, contextPct }))
+
+  const { rateLimits } = await $.session.usage()
+  const windows = rateLimits.length > 0 ? rateLimits : asLimits(await $.store.get(LIMITS_KEY))
+  const now = await $.clock.now()
+  await update($, limits, () => ({ windows, now }))
   loadedId = id
 }
 
 // A /clear or an in-app resume goes on under another session id with no
-// session.start: the first event that sees the new id loads its figures.
+// session.start, and with the session's state empty again: the first event
+// that sees the new id loads its figures. The engine's context fill is the
+// old session's until a response, so the stored one stands in.
 async function follow($: Engine) {
   const id = await $.session.id()
   if (id !== loadedId) await load($, id)
@@ -176,6 +187,8 @@ async function follow($: Engine) {
 async function save($: Engine, id: string) {
   if (id !== loadedId) return
   const { tps, ...figures } = await read($, tokens)
+  // A session that never had a request has nothing worth keeping.
+  if (figures.input + figures.output + figures.cacheRead + figures.cacheWrite === 0) return
   const text = JSON.stringify(figures)
   if (lastSaved.get(id) === text) return
   await $.store.set(SESSION_KEY + id, { ...figures, savedAt: await $.clock.now() })
@@ -199,20 +212,11 @@ export const register: Register = on => {
     $.ui.status(undefined)
     const id = await $.session.id()
     // A hot reload keeps the session's state, which is newer than the store.
+    // Otherwise a resumed session has no fill until its first response, so
+    // its stored one stands in.
     const t = await read($, tokens)
     if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
-    else await load($, id)
-
-    // A resumed session has no fill until its first response; its stored one
-    // stands in. The plan's usage is the account's, so the last stored reading
-    // does for any session until a response brings a new one.
-    const { context, rateLimits } = await $.session.usage()
-    if (context.percent !== undefined) {
-      await update($, tokens, t => ({ ...t, contextPct: context.percent ?? t.contextPct }))
-    }
-    const windows = rateLimits.length > 0 ? rateLimits : asLimits(await $.store.get(LIMITS_KEY))
-    const now = await $.clock.now()
-    await update($, limits, () => ({ windows, now }))
+    else await load($, id, (await $.session.usage()).context.percent)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
@@ -246,7 +250,9 @@ export const register: Register = on => {
     return step
   })
 
-  // After each main-thread turn, and when a usage window moves a whole point.
+  // After each main-thread turn, and when a usage window moves a whole point;
+  // the figures are saved here, once the turn's context fill is in, rather
+  // than on every request.
   on('session.measure', async ($, e, next) => {
     await follow($)
     if (e.context.percent !== undefined) {
@@ -257,12 +263,7 @@ export const register: Register = on => {
       await update($, limits, () => ({ windows: e.rateLimits, now }))
       await $.store.set(LIMITS_KEY, e.rateLimits)
     }
-    return next(e)
-  })
-
-  // Saved once a main-thread turn ends rather than on every request.
-  on('turn.complete', async ($, e, next) => {
-    if (e.agentId === undefined) await save($, await $.session.id())
+    await save($, await $.session.id())
     return next(e)
   })
 
