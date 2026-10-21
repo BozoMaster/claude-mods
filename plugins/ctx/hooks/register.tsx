@@ -171,6 +171,23 @@ export function stale(saved: { key: string; savedAt: number }[], keep: number): 
 let loadedId: string | undefined
 const lastSaved = new Map<string, string>()
 
+// The effort the last main-loop request in this process was sent with. It is
+// the process's setting, not a session's, so it outlives a /clear or a resume
+// and wins over the effort a resumed session was saved with.
+let lastEffort: string | undefined
+
+// HOME, read once per load of the module.
+let home: Promise<string | undefined> | undefined
+
+// Writes `next` over the place only where it differs: every write of a value
+// the row reads draws the row again.
+async function setPlace($: Engine, next: Partial<Place>) {
+  const p = await read($, place)
+  const keys = Object.keys(next) as (keyof Place)[]
+  if (keys.every(k => p[k] === next[k])) return
+  await update($, place, q => ({ ...q, ...next }))
+}
+
 // Loads a session's figures into state, which starts empty for every
 // session: its stored totals, the context fill (the live one where the
 // engine has it, else the stored one), and the plan's usage as the engine
@@ -187,7 +204,7 @@ async function load($: Engine, id: string, livePct?: number) {
     : {}
   const contextPct = livePct ?? saved?.contextPct ?? 0
   await update($, tokens, () => ({ ...ZERO, ...figures, contextPct }))
-  await update($, place, p => ({ ...p, effort: saved?.effort }))
+  await setPlace($, { effort: lastEffort ?? saved?.effort })
 
   const { rateLimits } = await $.session.usage()
   const windows = rateLimits.length > 0 ? rateLimits : asLimits(await $.store.get(LIMITS_KEY))
@@ -199,8 +216,8 @@ async function load($: Engine, id: string, livePct?: number) {
 // The branch checked out, or the commit when none is; undefined outside a
 // repository or where commands cannot run.
 async function branch($: Engine): Promise<string | undefined> {
-  if (!(await $.session.repo())) return undefined
   try {
+    if (!(await $.session.repo())) return undefined
     for (const argv of [
       ['git', 'symbolic-ref', '--short', '-q', 'HEAD'],
       ['git', 'rev-parse', '--short', 'HEAD'],
@@ -214,22 +231,26 @@ async function branch($: Engine): Promise<string | undefined> {
   return undefined
 }
 
-// Reads the folder, branch and model afresh: on start, after each turn and
-// once a minute, so a /model or a change of directory shows soon after.
+// Reads the folder, branch and model afresh: on start, on a change of
+// session, after each turn and once a minute, so a /model or a change of
+// directory shows soon after.
 async function locate($: Engine) {
-  const dir = shortDir(await $.session.cwd(), await $.env.get('HOME'))
-  const b = await branch($)
-  const model = await $.session.model()
-  await update($, place, p => ({ ...p, dir, branch: b, model }))
+  home ??= $.env.get('HOME')
+  const [cwd, h, b, model] = await Promise.all([$.session.cwd(), home, branch($), $.session.model()])
+  await setPlace($, { dir: shortDir(cwd, h), branch: b, model })
 }
 
 // A /clear or an in-app resume goes on under another session id with no
 // session.start, and with the session's state empty again: the first event
-// that sees the new id loads its figures. The engine's context fill is the
-// old session's until a response, so the stored one stands in.
-async function follow($: Engine) {
+// that sees the new id loads its figures and reads the place afresh. The
+// engine's context fill is the old session's until a response, so the
+// stored one stands in. True when it loaded, the place read with it.
+async function follow($: Engine): Promise<boolean> {
   const id = await $.session.id()
-  if (id !== loadedId) await load($, id)
+  if (id === loadedId) return false
+  await load($, id)
+  await locate($)
+  return true
 }
 
 async function save($: Engine, id: string) {
@@ -272,10 +293,11 @@ export const register: Register = on => {
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
     $.clock.every(60_000, async () => {
-      await follow($)
+      if (!(await follow($))) await locate($)
+      // Off a subscription there are no countdowns to move on.
+      if ((await read($, limits)).windows.length === 0) return
       const now = await $.clock.now()
       await update($, limits, l => ({ ...l, now }))
-      await locate($)
     })
     await prune($, id)
     return next(e)
@@ -286,8 +308,8 @@ export const register: Register = on => {
   on('turn.step', async function* ($, e, next) {
     await follow($)
     if (e.agentId === undefined) {
-      const effort = e.effort === undefined ? undefined : String(e.effort)
-      await update($, place, p => ({ ...p, effort }))
+      lastEffort = e.effort === undefined ? undefined : String(e.effort)
+      await setPlace($, { effort: lastEffort })
     }
     const startedAt = await $.clock.now()
     const step = yield* next(e)
@@ -311,9 +333,10 @@ export const register: Register = on => {
   // the figures are saved here, once the turn's context fill is in, rather
   // than on every request.
   on('session.measure', async ($, e, next) => {
-    await follow($)
-    if (e.context.percent !== undefined) {
-      await update($, tokens, t => ({ ...t, contextPct: e.context.percent ?? t.contextPct }))
+    const followed = await follow($)
+    const pct = e.context.percent
+    if (pct !== undefined && (await read($, tokens)).contextPct !== pct) {
+      await update($, tokens, t => ({ ...t, contextPct: pct }))
     }
     if (e.changed.includes('rateLimits') && e.rateLimits.length > 0) {
       const now = await $.clock.now()
@@ -321,7 +344,7 @@ export const register: Register = on => {
       await $.store.set(LIMITS_KEY, e.rateLimits)
     }
     await save($, await $.session.id())
-    await locate($)
+    if (!followed) await locate($)
     return next(e)
   })
 

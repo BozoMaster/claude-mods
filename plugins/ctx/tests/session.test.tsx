@@ -22,12 +22,21 @@ const USAGE = {
 
 // The engine beneath the plugin, as each test needs it: a session whose id,
 // context fill and usage windows the test sets, run from ~/proj on main
-// with Opus 5.5, a store held in a Map the
+// with Opus 5.5 unless it says otherwise, a store held in a Map the
 // test reads and seeds, counting its writes by key, and timers that are
 // refused so they never run on their own.
 type Window = { kind: string; percentUsed: number; resetsAt?: string }
 
-function engine(on: On, session: { id: string; percent?: number; rateLimits?: Window[] }) {
+type Session = {
+  id: string
+  percent?: number
+  rateLimits?: Window[]
+  cwd?: string
+  model?: string
+  repo?: boolean
+}
+
+function engine(on: On, session: Session) {
   const store = new Map<string, unknown>()
   const writes = new Map<string, number>()
   on('store.get', (_, e) => ({ value: store.get(e.key) }))
@@ -44,13 +53,15 @@ function engine(on: On, session: { id: string; percent?: number; rateLimits?: Wi
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: session.id }))
-  on('session.cwd', () => ({ value: '/home/me/proj' }))
+  on('session.cwd', () => ({ value: session.cwd ?? '/home/me/proj' }))
   on('env.get', () => ({ value: '/home/me' }))
-  on('session.repo', () => ({ value: { root: '/home/me/proj', remote: null, internal: false, name: null } }))
+  on('session.repo', () => ({
+    value: session.repo === false ? null : { root: '/home/me/proj', remote: null, internal: false, name: null },
+  }))
   on('process.run', () => ({
     value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
   }))
-  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.model', () => ({ value: session.model ?? 'claude-opus-5-5' }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW,
@@ -240,4 +251,76 @@ test('the store keeps the 20 most recently saved sessions and leaves the usage r
   expect(kept).not.toContain('session:s3')
   expect(kept).toContain('session:s4')
   expect(store.has('limits')).toBe(true)
+})
+
+const SUBAGENT_STEP = { ...STEP, effort: 'low', agentId: 'a1' } as const
+
+async function drain(step: AsyncIterable<unknown>) {
+  for await (const _ of step) {
+    // drain
+  }
+}
+
+test('an in-app resume shows the folder and model it is in before any reply', async ($, on) => {
+  const session: Session = { id: 'fresh' }
+  const { store } = engine(on, session)
+  store.set('session:old', { input: 2, output: 242, cacheRead: 130_300, cacheWrite: 1_100, contextPct: 13, savedAt: NOW })
+
+  await $.session.start(START)
+  await $.session.end({ reason: 'resume', sessionId: 'fresh', resume: { id: 'fresh' } })
+  Object.assign(session, { id: 'old', cwd: '/home/me/other', model: 'claude-sonnet-5-5', repo: false })
+  // The first event after the switch, a subagent's request, before any
+  // reply of the main conversation and so before any measurement.
+  await drain($.turn.step(SUBAGENT_STEP))
+
+  const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
+  expect(await row(ui, /│ ctx /)).toBe('~/other · Sonnet 5.5 │ ctx 13% · 99% hit')
+  await ui.unmount()
+})
+
+test("the effort is the process's: it outlives /clear and wins over a resumed session's stored one", async ($, on) => {
+  const session: Session = { id: 'one' }
+  const { store } = engine(on, session)
+  store.set('session:two', {
+    input: 2,
+    output: 242,
+    cacheRead: 130_300,
+    cacheWrite: 1_100,
+    contextPct: 13,
+    effort: 'low',
+    savedAt: NOW,
+  })
+
+  await $.session.start(START)
+  await drain($.turn.step(STEP))
+  await $.session.end({ reason: 'clear', sessionId: 'one', resume: { id: 'one' } })
+  session.id = 'two'
+  // A subagent's effort is its own and leaves the row's alone.
+  await drain($.turn.step(SUBAGENT_STEP))
+
+  const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
+  expect(await row(ui, /│ ctx /)).toContain('Opus 5.5 high │')
+  await ui.unmount()
+})
+
+test('a reading that changes nothing writes nothing, so the row is not drawn again', async ($, on) => {
+  engine(on, { id: 'abc' })
+  const writes = new Map<string, number>()
+  on('state.set', async (_, e, next) => {
+    writes.set(e.key, (writes.get(e.key) ?? 0) + 1)
+    return next(e)
+  })
+  const version = async (key: 'place' | 'tokens') => writes.get(key) ?? 0
+
+  await $.session.start(START)
+  await drain($.turn.step(STEP))
+  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['context'] })
+  const place = await version('place')
+  const tokens = await version('tokens')
+  expect(place).toBeGreaterThan(0)
+
+  // The same folder, branch and model, and the same fill.
+  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['cost'] })
+  expect(await version('place')).toBe(place)
+  expect(await version('tokens')).toBe(tokens)
 })

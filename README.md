@@ -18,12 +18,13 @@ It is plain text, with only the figures that need a look picked out in color:
   by, since the first requests always write the cache)
 - plan usage turns yellow from 75% and red from 90%
 
-The effort is the one the last main-conversation request was sent with, so it shows from
-the first reply on, and a `/model` or `/effort` change shows after the next one. The folder,
-branch and model are read again after every reply and once a minute.
+The effort is the one the last main-conversation request was sent with, so a new session
+shows it from the first reply on, and a `/model` or `/effort` change shows after the next
+one; it carries over a `/clear` or a resume. The folder, branch and model are read again on
+a `/clear` or a resume, after every reply and once a minute.
 
-The figures are saved as you go, so a resumed session opens on its own totals, context fill
-and effort rather than zeros, and the last plan usage reading shows in any session until the
+The figures are saved as you go, so a resumed session opens on its own totals and context
+fill rather than zeros, and the last plan usage reading shows in any session until the
 first reply brings a fresh one (so it can be a little behind if you used Claude elsewhere
 meanwhile). `/clear` starts the totals over. The plan usage stays empty on API billing, and
 once a window's reset time passes it reads 0% until the next reply.
