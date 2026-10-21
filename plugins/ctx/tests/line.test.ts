@@ -4,11 +4,13 @@ import {
   asLimits,
   asSaved,
   contextTone,
-  fmt,
   hitTone,
   line,
+  modelName,
   parts,
+  placeParts,
   rate,
+  shortDir,
   stale,
   until,
   usageParts,
@@ -19,7 +21,7 @@ const EMPTY = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextPct: 0,
 
 const NOW = Date.parse('2026-10-20T12:00:00Z')
 
-test('the line reads the totals, the speed and the cache hit', () => {
+test('the line reads the context fill, the cache hit over the totals and the speed', () => {
   const text = line(
     parts({
       input: 1200,
@@ -30,21 +32,37 @@ test('the line reads the totals, the speed and the cache hit', () => {
       tps: 62,
     }),
   )
-  expect(text).toBe('13% · in 1.2k · out 4.1k · 62 tps · read 1.5M · write 80.0k · 95% hit')
+  expect(text).toBe('13% · 95% hit · 62 tps')
+})
+
+test('the place reads the folder with its branch, then the model with its effort', () => {
+  expect(line(placeParts({ dir: '~/OPC', model: 'claude-opus-5-5', effort: 'high' }))).toBe('~/OPC · Opus 5.5 high')
+  expect(line(placeParts({ dir: '~/proj', branch: 'main', model: 'claude-sonnet-5-5' }))).toBe('~/proj (main) · Sonnet 5.5')
+  expect(placeParts({ dir: '', model: '' })).toEqual([])
+})
+
+test('a model id reads as /model names it, and an id of another shape as it is', () => {
+  expect(modelName('claude-opus-5-5')).toBe('Opus 5.5')
+  expect(modelName('claude-fable-5-1')).toBe('Fable 5.1')
+  expect(modelName('claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+  expect(modelName('claude-opus-5-5[1m]')).toBe('Opus 5.5')
+  expect(modelName('claude-opus-4')).toBe('Opus 4')
+  expect(modelName('claude-3-5-sonnet-20241022')).toBe('claude-3-5-sonnet-20241022')
+  expect(modelName('gpt-x')).toBe('gpt-x')
+})
+
+test('the folder shows the home directory as ~, and only a whole one', () => {
+  expect(shortDir('/home/me', '/home/me')).toBe('~')
+  expect(shortDir('/home/me/OPC', '/home/me')).toBe('~/OPC')
+  expect(shortDir('/home/meg/OPC', '/home/me')).toBe('/home/meg/OPC')
+  expect(shortDir('/srv/app', '/home/me')).toBe('/srv/app')
+  expect(shortDir('/srv/app', undefined)).toBe('/srv/app')
 })
 
 test('an empty session shows zeros, not NaN, and no speed yet', () => {
   const text = line(parts(EMPTY))
   expect(text).toContain('0% hit')
   expect(text).not.toContain('tps')
-})
-
-test('token counts round into the next unit rather than reading 1000.0k', () => {
-  expect(fmt(999)).toBe('999')
-  expect(fmt(1_000)).toBe('1.0k')
-  expect(fmt(999_949)).toBe('999.9k')
-  expect(fmt(999_950)).toBe('1.0M')
-  expect(fmt(2_345_678)).toBe('2.3M')
 })
 
 test('rate is output tokens over seconds, and ignores steps too short to measure', () => {
@@ -126,6 +144,8 @@ test('the countdown keeps its two largest units, drops a zero one, and rounds up
 test('stored figures are read back only in the right shape', () => {
   const ok = { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, contextPct: 5, savedAt: 6 }
   expect(asSaved(ok)).toEqual(ok)
+  expect(asSaved({ ...ok, effort: 'high' })).toEqual({ ...ok, effort: 'high' })
+  expect(asSaved({ ...ok, effort: 3 })).toBe(undefined)
   expect(asSaved({ ...ok, input: '1' })).toBe(undefined)
   expect(asSaved({ ...ok, output: -1 })).toBe(undefined)
   expect(asSaved({ ...ok, cacheRead: Number.NaN })).toBe(undefined)

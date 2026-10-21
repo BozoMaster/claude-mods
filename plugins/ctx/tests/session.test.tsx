@@ -21,7 +21,8 @@ const USAGE = {
 }
 
 // The engine beneath the plugin, as each test needs it: a session whose id,
-// context fill and usage windows the test sets, a store held in a Map the
+// context fill and usage windows the test sets, run from ~/proj on main
+// with Opus 5.5, a store held in a Map the
 // test reads and seeds, counting its writes by key, and timers that are
 // refused so they never run on their own.
 type Window = { kind: string; percentUsed: number; resetsAt?: string }
@@ -43,6 +44,13 @@ function engine(on: On, session: { id: string; percent?: number; rateLimits?: Wi
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: session.id }))
+  on('session.cwd', () => ({ value: '/home/me/proj' }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('session.repo', () => ({ value: { root: '/home/me/proj', remote: null, internal: false, name: null } }))
+  on('process.run', () => ({
+    value: { exitCode: 0, stdout: 'main\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+  }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({
     value: {
       startedAt: NOW,
@@ -67,7 +75,7 @@ function engine(on: On, session: { id: string; percent?: number; rateLimits?: Wi
 }
 
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
-const STEP = { turnId: 't', index: 0, model: 'claude-opus-5-5', messageCount: 1 }
+const STEP = { turnId: 't', index: 0, model: 'claude-opus-5-5', effort: 'high', messageCount: 1 } as const
 const COMPLETE = { answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as const
 
 async function row(ui: { find: (q: { type: 'Text'; text: RegExp }) => Promise<{ text: string } | undefined> }, re: RegExp) {
@@ -82,6 +90,7 @@ test('a resumed session opens on its stored totals, fill and the last usage read
     cacheRead: 130_300,
     cacheWrite: 1_100,
     contextPct: 13,
+    effort: 'xhigh',
     savedAt: NOW - 60_000,
   })
   store.set('limits', [FIVE_HOUR, WEEK])
@@ -89,7 +98,7 @@ test('a resumed session opens on its stored totals, fill and the last usage read
   await $.session.start(START)
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
 
-  expect(await row(ui, /^ctx /)).toBe('ctx 13% · in 2 · out 242 · read 130.3k · write 1.1k · 99% hit')
+  expect(await row(ui, /│ ctx /)).toBe('~/proj (main) · Opus 5.5 xhigh │ ctx 13% · 99% hit')
   expect(await row(ui, /^5h /)).toBe('5h 7% (4h 10m) · wk 11% (3d 3h)')
   await ui.unmount()
 })
@@ -102,7 +111,7 @@ test('a new session starts at zero but still shows the account usage', async ($,
   await $.session.start(START)
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
 
-  expect(await row(ui, /^ctx /)).toBe('ctx 0% · in 0 · out 0 · read 0 · write 0 · 0% hit')
+  expect(await row(ui, /│ ctx /)).toBe('~/proj (main) · Opus 5.5 │ ctx 0% · 0% hit')
   expect(await row(ui, /^5h /)).toBe('5h 7% (4h 10m)')
   await ui.unmount()
 })
@@ -115,7 +124,7 @@ test('a live fill wins over the stored one, and a stored file of the wrong shape
   await $.session.start(START)
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
 
-  expect(await row(ui, /^ctx /)).toBe('ctx 40% · in 0 · out 0 · read 0 · write 0 · 0% hit')
+  expect(await row(ui, /│ ctx /)).toBe('~/proj (main) · Opus 5.5 │ ctx 40% · 0% hit')
   expect(await ui.find({ type: 'Text', text: /^5h / })).toBe(undefined)
   await ui.unmount()
 })
@@ -136,6 +145,7 @@ test('the figures are saved once the turn is measured, and an unchanged turn wri
     cacheRead: 120_000,
     cacheWrite: 1_000,
     contextPct: 12,
+    effort: 'high',
     savedAt: NOW,
   })
 
@@ -166,7 +176,7 @@ test('an in-app resume brings back the new session and reloads the usage', async
   await $.session.measure({ context: { window: 1_000_000, percent: 50 }, rateLimits: [], changed: ['cost'] })
 
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
-  expect(await row(ui, /^ctx /)).toBe('ctx 50% · in 2 · out 242 · read 130.3k · write 1.1k · 99% hit')
+  expect(await row(ui, /│ ctx /)).toBe('~/proj (main) · Opus 5.5 │ ctx 50% · 99% hit')
   expect(await row(ui, /^5h /)).toBe('5h 7% (4h 10m) · wk 11% (3d 3h)')
   await ui.unmount()
 })
@@ -189,7 +199,7 @@ test('/clear saves the old session and the next one starts from zero', async ($,
 
   expect(store.get('session:one')).toMatchObject({ output: 200 })
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
-  expect(await row(ui, /^ctx /)).toContain('out 200 ·')
+  expect(await row(ui, /│ ctx /)).toBe('~/proj (main) · Opus 5.5 high │ ctx 0% · 99% hit')
   await ui.unmount()
 })
 
@@ -201,7 +211,7 @@ test('usage windows come from measurements, and are stored for the next session'
   await $.session.measure({ context: { window: 1_000_000, percent: 20 }, rateLimits: [], changed: ['context'] })
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
   expect(await ui.find({ type: 'Text', text: /^5h / })).toBe(undefined)
-  expect(await row(ui, /^ctx /)).toContain('ctx 20%')
+  expect(await row(ui, /│ ctx /)).toContain('ctx 20%')
 
   await $.session.measure({
     context: { window: 1_000_000, percent: 20 },

@@ -7,9 +7,19 @@ export type Tokens = {
   tps: number
 }
 
-// A session's figures as $.store keeps them between runs: the totals and
-// the context fill, not the speed, which is only ever live.
-export type Saved = Omit<Tokens, 'tps'> & { savedAt: number }
+// A session's figures as $.store keeps them between runs: the totals, the
+// context fill and the last effort, not the speed, which is only ever live.
+export type Saved = Omit<Tokens, 'tps'> & { effort?: string; savedAt: number }
+
+// Where the session is and what answers it: the folder (home as ~), its git
+// branch, the model's id, and the effort the last main-loop request was sent
+// with.
+export type Place = {
+  dir: string
+  branch?: string
+  model: string
+  effort?: string
+}
 
 // One plan usage window as the last API response reported it.
 export type Limit = {
@@ -27,6 +37,6 @@ export type Limits = {
 
 declare module 'claude-code' {
   interface PluginState {
-    'ctx': { tokens: Tokens; limits: Limits }
+    'ctx': { tokens: Tokens; limits: Limits; place: Place }
   }
 }

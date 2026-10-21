@@ -13,6 +13,10 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: '/home/me/OPC' }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('session.repo', () => ({ value: null }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('store.get', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
   on('session.usage', () => ({
@@ -36,6 +40,9 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   const ui = await $.ui.mount({ ...HINT, surface: 'terminal' })
 
   expect((await ui.find({ type: 'Text', text: /^auto mode on/ }))?.text).toBe(HINT.props.hint)
+  // Where and which model, then a dimmed bar, then the session's figures.
+  expect((await ui.find({ type: 'Text', text: /│ ctx / }))?.text).toBe('~/OPC · Opus 5.5 │ ctx 85% · 0% hit')
+  expect((await ui.find({ type: 'Text', text: /^ │ $/ }))?.props.dimColor).toBe(true)
   expect((await ui.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
   expect((await ui.find({ type: 'Text', text: /^5h 92%$/ }))?.props.color).toBe('error')
   expect((await ui.find({ type: 'Text', text: /^ \(2h 10m\)$/ }))?.props.dimColor).toBe(true)
@@ -62,6 +69,10 @@ test('on the desktop: the row goes in the band above the prompt, and the termina
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: '/home/me/OPC' }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('session.repo', () => ({ value: null }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('store.get', () => ({ value: undefined }))
   on('store.keys', () => ({ value: [] }))
   on('session.usage', () => ({
@@ -86,6 +97,7 @@ test('on the desktop: the row goes in the band above the prompt, and the termina
 
   const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await desk.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
+  expect((await desk.find({ type: 'Text', text: /│ ctx / }))?.text).toBe('~/OPC · Opus 5.5 │ ctx 85% · 0% hit')
   expect((await desk.find({ type: 'Text', text: /^5h 92%$/ }))?.props.color).toBe('error')
   expect(await desk.find({ type: 'Text', text: /^engine band$/ })).toBe(undefined)
   await desk.unmount()

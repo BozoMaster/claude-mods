@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface as Engine, Register } from 'claude-code'
+import type { EngineInterface as Engine, Register, RenderInput } from 'claude-code'
 
-import type { Limit, Limits, Saved, Tokens } from '../types'
+import type { Limit, Limits, Place, Saved, Tokens } from '../types'
 
 const ZERO: Tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, contextPct: 0, tps: 0 }
 
@@ -11,6 +11,8 @@ const limits = atom({ plugin: 'ctx', key: 'limits' } as const, {
   windows: [],
   now: 0,
 } as Limits)
+
+const place = atom({ plugin: 'ctx', key: 'place' } as const, { dir: '', model: '' } as Place)
 
 // A figure worth a look is drawn in the theme's warning or error color;
 // everything else stays plain text. A note follows its figure, dimmed.
@@ -32,13 +34,6 @@ const SESSION_KEY = 'session:'
 const LIMITS_KEY = 'limits'
 const KEEP_SESSIONS = 20
 
-// Rounded first, so 999,950 reads 1.0M and never 1000.0k.
-export function fmt(n: number): string {
-  if (n >= 999_950) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
-
 // Time left as its two largest units, rounded up so a window that has not
 // reset never reads 0m: `3d 4h`, `2h 10m`, `42m`, and `3d` or `1h` when the
 // smaller unit is 0.
@@ -50,6 +45,22 @@ export function until(ms: number): string {
   if (days > 0) return hours > 0 ? `${days}d ${hours}h` : `${days}d`
   if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`
   return `${mins}m`
+}
+
+// The model as `/model` names it, from the id the engine reports:
+// claude-opus-5-5 reads Opus 5.5. An id of any other shape is drawn as it is.
+export function modelName(id: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?(?:\[[^\]]*\])?$/.exec(id)
+  if (!m) return id
+  const [, family = '', major, minor] = m
+  return `${family.charAt(0).toUpperCase()}${family.slice(1)} ${major}${minor ? `.${minor}` : ''}`
+}
+
+// The folder with the home directory as ~, as a shell prompt has it.
+export function shortDir(dir: string, home?: string): string {
+  if (!home) return dir
+  if (dir === home) return '~'
+  return dir.startsWith(home + '/') ? '~' + dir.slice(home.length) : dir
 }
 
 // Output tokens per second over one model request; 0 when it is too short to mean anything.
@@ -76,17 +87,25 @@ export function usageTone(pct: number): Tone | undefined {
   return undefined
 }
 
+// The session's figures: context fill, the cache hit over the session's
+// totals, and the speed of the last request. The totals themselves are kept
+// for the hit but not drawn.
 export function parts(t: Tokens): Part[] {
   const prompt = t.input + t.cacheRead + t.cacheWrite
   const hit = prompt > 0 ? Math.round((t.cacheRead / prompt) * 100) : 0
   return [
     { text: `${t.contextPct}%`, tone: contextTone(t.contextPct) },
-    { text: `in ${fmt(t.input)}` },
-    { text: `out ${fmt(t.output)}` },
-    ...(t.tps > 0 ? [{ text: `${t.tps} tps` }] : []),
-    { text: `read ${fmt(t.cacheRead)}` },
-    { text: `write ${fmt(t.cacheWrite)}` },
     { text: `${hit}% hit`, tone: hitTone(hit, prompt) },
+    ...(t.tps > 0 ? [{ text: `${t.tps} tps` }] : []),
+  ]
+}
+
+// Where the session is and what answers it: the folder with its git branch,
+// then the model with its effort, dimmed. Nothing until they are read.
+export function placeParts(p: Place): Part[] {
+  return [
+    ...(p.dir ? [{ text: p.branch ? `${p.dir} (${p.branch})` : p.dir }] : []),
+    ...(p.model ? [{ text: modelName(p.model), ...(p.effort ? { note: p.effort } : {}) }] : []),
   ]
 }
 
@@ -123,7 +142,8 @@ export function asSaved(v: unknown): Saved | undefined {
   if (typeof v !== 'object' || v === null) return undefined
   const s = v as Record<string, unknown>
   const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'contextPct', 'savedAt'] as const
-  return fields.every(f => isCount(s[f])) ? (s as Saved) : undefined
+  if (!fields.every(f => isCount(s[f]))) return undefined
+  return s.effort === undefined || typeof s.effort === 'string' ? (s as Saved) : undefined
 }
 
 export function asLimits(v: unknown): Limit[] {
@@ -167,12 +187,40 @@ async function load($: Engine, id: string, livePct?: number) {
     : {}
   const contextPct = livePct ?? saved?.contextPct ?? 0
   await update($, tokens, () => ({ ...ZERO, ...figures, contextPct }))
+  await update($, place, p => ({ ...p, effort: saved?.effort }))
 
   const { rateLimits } = await $.session.usage()
   const windows = rateLimits.length > 0 ? rateLimits : asLimits(await $.store.get(LIMITS_KEY))
   const now = await $.clock.now()
   await update($, limits, () => ({ windows, now }))
   loadedId = id
+}
+
+// The branch checked out, or the commit when none is; undefined outside a
+// repository or where commands cannot run.
+async function branch($: Engine): Promise<string | undefined> {
+  if (!(await $.session.repo())) return undefined
+  try {
+    for (const argv of [
+      ['git', 'symbolic-ref', '--short', '-q', 'HEAD'],
+      ['git', 'rev-parse', '--short', 'HEAD'],
+    ]) {
+      const { exitCode, stdout } = await $.process.run(argv, { timeoutMs: 5_000 })
+      if (exitCode === 0 && stdout.trim()) return stdout.trim()
+    }
+  } catch {
+    // No branch rather than no row.
+  }
+  return undefined
+}
+
+// Reads the folder, branch and model afresh: on start, after each turn and
+// once a minute, so a /model or a change of directory shows soon after.
+async function locate($: Engine) {
+  const dir = shortDir(await $.session.cwd(), await $.env.get('HOME'))
+  const b = await branch($)
+  const model = await $.session.model()
+  await update($, place, p => ({ ...p, dir, branch: b, model }))
 }
 
 // A /clear or an in-app resume goes on under another session id with no
@@ -189,9 +237,11 @@ async function save($: Engine, id: string) {
   const { tps, ...figures } = await read($, tokens)
   // A session that never had a request has nothing worth keeping.
   if (figures.input + figures.output + figures.cacheRead + figures.cacheWrite === 0) return
-  const text = JSON.stringify(figures)
+  const { effort } = await read($, place)
+  const kept = effort === undefined ? figures : { ...figures, effort }
+  const text = JSON.stringify(kept)
   if (lastSaved.get(id) === text) return
-  await $.store.set(SESSION_KEY + id, { ...figures, savedAt: await $.clock.now() })
+  await $.store.set(SESSION_KEY + id, { ...kept, savedAt: await $.clock.now() })
   lastSaved.set(id, text)
 }
 
@@ -217,6 +267,7 @@ export const register: Register = on => {
     const t = await read($, tokens)
     if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
     else await load($, id, (await $.session.usage()).context.percent)
+    await locate($)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
@@ -224,14 +275,20 @@ export const register: Register = on => {
       await follow($)
       const now = await $.clock.now()
       await update($, limits, l => ({ ...l, now }))
+      await locate($)
     })
     await prune($, id)
     return next(e)
   })
 
-  // Every model request of a turn, the main loop's and subagents' alike.
+  // Every model request of a turn, the main loop's and subagents' alike. The
+  // effort is the main loop's alone, as it was sent.
   on('turn.step', async function* ($, e, next) {
     await follow($)
+    if (e.agentId === undefined) {
+      const effort = e.effort === undefined ? undefined : String(e.effort)
+      await update($, place, p => ({ ...p, effort }))
+    }
     const startedAt = await $.clock.now()
     const step = yield* next(e)
     const usage = step.usage
@@ -264,6 +321,7 @@ export const register: Register = on => {
       await $.store.set(LIMITS_KEY, e.rateLimits)
     }
     await save($, await $.session.id())
+    await locate($)
     return next(e)
   })
 
@@ -276,38 +334,14 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The engine's hint line under the prompt, then one row of figures, redrawn
-  // whenever they change: tokens on the left, plan usage on the right.
+  // The engine's hint line under the prompt, then the row beneath it.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hint = await next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const { windows, now } = await read($, limits)
-    const left = parts(await read($, tokens))
-    const right = usageParts(windows, now)
-
-    const draw = (ps: Part[]) =>
-      ps.map((p, i) => [
-        i > 0 ? ' · ' : '',
-        p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
-        p.note ? <Text dimColor> {p.note}</Text> : '',
-      ])
-
+    const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
         {hint}
-        <Box width="100%" justifyContent="space-between" gap={2}>
-          <Box flexShrink={1}>
-            <Text wrap="truncate-end">
-              <Text dimColor>ctx </Text>
-              {draw(left)}
-            </Text>
-          </Box>
-          {right.length > 0 ? (
-            <Box flexShrink={0}>
-              <Text>{draw(right)}</Text>
-            </Box>
-          ) : null}
-        </Box>
+        {await row($, e)}
       </Box>
     )
   })
@@ -317,32 +351,40 @@ export const register: Register = on => {
   // way to a survey. The terminal leaves the band alone.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const { windows, now } = await read($, limits)
-    const left = parts(await read($, tokens))
-    const right = usageParts(windows, now)
-
-    const draw = (ps: Part[]) =>
-      ps.map((p, i) => [
-        i > 0 ? ' · ' : '',
-        p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
-        p.note ? <Text dimColor> {p.note}</Text> : '',
-      ])
-
-    return (
-      <Box width="100%" justifyContent="space-between" gap={2}>
-        <Box flexShrink={1}>
-          <Text wrap="truncate-end">
-            <Text dimColor>ctx </Text>
-            {draw(left)}
-          </Text>
-        </Box>
-        {right.length > 0 ? (
-          <Box flexShrink={0}>
-            <Text>{draw(right)}</Text>
-          </Box>
-        ) : null}
-      </Box>
-    )
+    return row($, e)
   })
+}
+
+// One row, redrawn whenever its values change: where the session is and the
+// model, then the session's figures, on the left; plan usage on the right.
+async function row($: Engine, e: RenderInput<'PromptHint' | 'AbovePrompt'>) {
+  const { Box, Text } = $.ui.resolve(e)
+  const { windows, now } = await read($, limits)
+  const at = placeParts(await read($, place))
+  const left = parts(await read($, tokens))
+  const right = usageParts(windows, now)
+
+  const draw = (ps: Part[]) =>
+    ps.map((p, i) => [
+      i > 0 ? ' · ' : '',
+      p.tone ? <Text color={p.tone}>{p.text}</Text> : p.text,
+      p.note ? <Text dimColor> {p.note}</Text> : '',
+    ])
+
+  return (
+    <Box width="100%" justifyContent="space-between" gap={2}>
+      <Box flexShrink={1}>
+        <Text wrap="truncate-end">
+          {at.length > 0 ? [draw(at), <Text dimColor> │ </Text>] : ''}
+          <Text dimColor>ctx </Text>
+          {draw(left)}
+        </Text>
+      </Box>
+      {right.length > 0 ? (
+        <Box flexShrink={0}>
+          <Text>{draw(right)}</Text>
+        </Box>
+      ) : null}
+    </Box>
+  )
 }

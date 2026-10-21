@@ -5,7 +5,7 @@
     {
       "name": "ctx",
       "source": "./plugins/ctx",
-      "description": "Context, token usage and output speed on the status line"
+      "description": "Folder, model, context, cache hit, speed and plan usage in a row under the prompt"
     }
   ]
 }
