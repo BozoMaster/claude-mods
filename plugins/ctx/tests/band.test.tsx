@@ -65,7 +65,7 @@ const BAND = {
   },
 } as const
 
-test('on the desktop: the row goes in the band above the prompt, and the terminal leaves the band alone', async ($, on) => {
+test('on the desktop: the row goes in the band above the prompt without the model, and the terminal leaves the band alone', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc' }))
@@ -97,7 +97,9 @@ test('on the desktop: the row goes in the band above the prompt, and the termina
 
   const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
   expect((await desk.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
-  expect((await desk.find({ type: 'Text', text: /│ ctx / }))?.text).toBe('~/OPC · Opus 5.5 │ ctx 85% · 0% hit')
+  // The app shows the model and effort itself, so the row leaves them out.
+  expect((await desk.find({ type: 'Text', text: /│ ctx / }))?.text).toBe('~/OPC │ ctx 85% · 0% hit')
+  expect(await desk.find({ type: 'Text', text: /Opus/ })).toBe(undefined)
   expect((await desk.find({ type: 'Text', text: /^5h 92%$/ }))?.props.color).toBe('error')
   expect(await desk.find({ type: 'Text', text: /^engine band$/ })).toBe(undefined)
   await desk.unmount()

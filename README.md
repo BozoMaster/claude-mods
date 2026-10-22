@@ -31,6 +31,7 @@ once a window's reset time passes it reads 0% until the next reply.
 
 In the desktop app, which draws no hint line under the prompt in a local session, the same
 row, colors and all, sits in the band just above the prompt instead, giving way to a survey.
+It leaves out the model and its effort there, since the app shows them beside the prompt.
 
 Install in the desktop app: click **+** next to the prompt box, **Plugins**, **Add marketplace**
 with `BozoMaster/claude-mods`, then **Add plugin** `ctx`.

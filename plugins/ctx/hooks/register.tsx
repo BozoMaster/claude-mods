@@ -380,10 +380,13 @@ export const register: Register = on => {
 
 // One row, redrawn whenever its values change: where the session is and the
 // model, then the session's figures, on the left; plan usage on the right.
+// The desktop app shows the model and its effort beside the prompt already,
+// so there the row leaves them out.
 async function row($: Engine, e: RenderInput<'PromptHint' | 'AbovePrompt'>) {
   const { Box, Text } = $.ui.resolve(e)
   const { windows, now } = await read($, limits)
-  const at = placeParts(await read($, place))
+  const p = await read($, place)
+  const at = placeParts(e.surface === 'desktop' ? { ...p, model: '' } : p)
   const left = parts(await read($, tokens))
   const right = usageParts(windows, now)
 
