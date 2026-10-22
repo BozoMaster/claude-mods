@@ -92,7 +92,7 @@ test('on the desktop: the row goes on the status line under the prompt as plain 
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
   // The app shows the model and effort itself, so the line leaves them out.
-  expect(statuses).toEqual([undefined, '~/OPC │ ctx 85% · 0% hit │ 5h 92% (2h 10m) · wk 40% (3d 4h)'])
+  expect(statuses).toEqual([undefined, '~/OPC │ 85% · 0% hit │ 5h 92% (2h 10m) · wk 40% (3d 4h)'])
 
   // The band above the prompt is the app's again.
   const band = await $.ui.mount({

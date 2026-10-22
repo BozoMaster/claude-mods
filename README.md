@@ -30,12 +30,13 @@ meanwhile). `/clear` starts the totals over. The plan usage stays empty on API b
 once a window's reset time passes it reads 0% until the next reply.
 
 In the desktop app, which draws no hint line under the prompt in a local session, the row
-goes on the status line under the prompt instead, after the mod's name: plain text with no
+goes on the status line under the prompt instead, after the mod's name, which the app puts
+first and which stands in for `ctx`: plain text with no
 colors, right-aligned by the app, and without the model and its effort, which the app shows
 beside the prompt. A session the terminal draws too keeps its terminal status line as it is.
 
 The app gives a status line no left and right, so the plan usage is pushed right with spaces
-that pad the line to 88 characters. The mod cannot see how wide the window is: if the usage
+that pad the line to 104 characters. The mod cannot see how wide the window is: if the usage
 is cut off, or the gap is too small, set `CTX_DESKTOP_WIDTH` in the `env` block of
 `~/.claude/settings.json` to a smaller or larger count (`0` turns the padding off), and start
 a new session.
