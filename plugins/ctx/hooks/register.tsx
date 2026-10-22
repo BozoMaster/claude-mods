@@ -136,14 +136,33 @@ export function line(ps: Part[]): string {
 }
 
 // The desktop app's status line under the prompt is one run of plain text,
-// after the plugin's name: the folder, the session's figures and the plan
-// usage, split by bars. The app shows the model and its effort itself.
-export function statusLine(p: Place, t: Tokens, windows: Limit[], now: number): string {
-  return [placeParts({ ...p, model: '' }), parts(t), usageParts(windows, now)]
-    .filter(ps => ps.length > 0)
-    .map(line)
-    .join(' │ ')
+// after the plugin's name, which the app right-aligns: the folder and the
+// session's figures, then the plan usage pushed toward the right by figure
+// spaces, which the app does not collapse as it does ordinary ones. They pad
+// the line out to `width` characters of the app's font; a line already that
+// long, or no width, keeps a bar between the two. The app shows the model and
+// its effort itself.
+export const FIGURE_SPACE = '\u2007'
+
+export function statusLine(p: Place, t: Tokens, windows: Limit[], now: number, width = 0): string {
+  const left = [placeParts({ ...p, model: '' }), parts(t)].map(line).filter(Boolean).join(' │ ')
+  const right = line(usageParts(windows, now))
+  if (!right) return left
+  const gap = width - [...left].length - [...right].length
+  return gap >= 3 ? left + FIGURE_SPACE.repeat(gap) + right : `${left} │ ${right}`
 }
+
+// The width the desktop status line is padded to, in characters, from
+// CTX_DESKTOP_WIDTH, where 0 turns the padding off; the default where it is
+// unset or not a whole count.
+export function desktopWidth(v: string | undefined): number {
+  const n = Number(v)
+  return v?.trim() && Number.isInteger(n) && n >= 0 ? n : DEFAULT_DESKTOP_WIDTH
+}
+
+// A guess for a full-width window on a 1920-pixel screen; CTX_DESKTOP_WIDTH
+// in the env block of ~/.claude/settings.json overrides it.
+const DEFAULT_DESKTOP_WIDTH = 100
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
@@ -192,6 +211,9 @@ let home: Promise<string | undefined> | undefined
 // The text last set on the status line, so an unchanged one is not set again.
 let lastStatus: string | undefined
 
+// CTX_DESKTOP_WIDTH, read once per load of the module.
+let width: Promise<string | undefined> | undefined
+
 // The desktop app draws no hint line under the prompt in a local session, but
 // does draw a plugin's status line there: in a session only the desktop
 // draws, the row goes there as plain text. A terminal's status line is left
@@ -201,7 +223,8 @@ async function status($: Engine) {
   let text: string | undefined
   if (surfaces.includes('desktop') && !surfaces.includes('terminal')) {
     const { windows, now } = await read($, limits)
-    text = statusLine(await read($, place), await read($, tokens), windows, now)
+    width ??= $.env.get('CTX_DESKTOP_WIDTH')
+    text = statusLine(await read($, place), await read($, tokens), windows, now, desktopWidth(await width))
   }
   if (text === lastStatus) return
   $.ui.status(text)

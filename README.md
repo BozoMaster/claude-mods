@@ -34,6 +34,12 @@ goes on the status line under the prompt instead, after the mod's name: plain te
 colors, right-aligned by the app, and without the model and its effort, which the app shows
 beside the prompt. A session the terminal draws too keeps its terminal status line as it is.
 
+The app gives a status line no left and right, so the plan usage is pushed right with spaces
+that pad the line to 100 characters. The mod cannot see how wide the window is: if the usage
+is cut off, or the gap is too small, set `CTX_DESKTOP_WIDTH` in the `env` block of
+`~/.claude/settings.json` to a smaller or larger count (`0` turns the padding off), and start
+a new session.
+
 Install in the desktop app: click **+** next to the prompt box, **Plugins**, **Add marketplace**
 with `BozoMaster/claude-mods`, then **Add plugin** `ctx`.
 

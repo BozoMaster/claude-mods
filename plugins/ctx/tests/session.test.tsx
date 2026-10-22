@@ -35,6 +35,7 @@ type Session = {
   model?: string
   repo?: boolean
   surfaces?: ('terminal' | 'desktop')[]
+  width?: string
 }
 
 function engine(on: On, session: Session) {
@@ -61,7 +62,7 @@ function engine(on: On, session: Session) {
   on('session.attach', (_, e) => ({ clientId: e.clientId }))
   on('session.id', () => ({ value: session.id }))
   on('session.cwd', () => ({ value: session.cwd ?? '/home/me/proj' }))
-  on('env.get', () => ({ value: '/home/me' }))
+  on('env.get', (_, e) => ({ value: e.name === 'CTX_DESKTOP_WIDTH' ? (session.width ?? '0') : '/home/me' }))
   on('session.repo', () => ({
     value: session.repo === false ? null : { root: '/home/me/proj', remote: null, internal: false, name: null },
   }))
@@ -384,3 +385,13 @@ for (const surfaces of [['terminal'], ['terminal', 'desktop']] as const) {
     expect(statuses).toEqual([undefined])
   })
 }
+
+test('the plan usage is pushed right by figure spaces to the width set, and a line too long keeps its bar', async ($, on) => {
+  const { statuses } = engine(on, { id: 'wide', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK], width: '80' })
+  await $.session.start(DESKTOP_START)
+  const left = '~/proj (main) │ 0% · 0% hit'
+  const right = '5h 7% (4h 10m) · wk 11% (3d 3h)'
+  const text = statuses.at(-1) ?? ''
+  expect(text).toBe(left + '\u2007'.repeat(80 - [...left].length - right.length) + right)
+  expect([...text]).toHaveLength(80)
+})

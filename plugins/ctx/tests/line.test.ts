@@ -4,6 +4,7 @@ import {
   asLimits,
   asSaved,
   contextTone,
+  desktopWidth,
   hitTone,
   line,
   modelName,
@@ -169,4 +170,10 @@ test('pruning keeps the newest sessions and names the rest', () => {
   expect(stale(saved, 2)).toEqual(['a'])
   expect(stale(saved, 3)).toEqual([])
   expect(stale(saved, 0)).toEqual(['b', 'c', 'a'])
+})
+
+test('the desktop width comes from CTX_DESKTOP_WIDTH, 0 turns the padding off, and anything else is the default', () => {
+  expect(desktopWidth('120')).toBe(120)
+  expect(desktopWidth('0')).toBe(0)
+  for (const v of [undefined, '', ' ', 'wide', '-5', '12.5']) expect(desktopWidth(v)).toBe(100)
 })

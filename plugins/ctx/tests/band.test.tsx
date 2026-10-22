@@ -63,7 +63,7 @@ test('on the desktop: the row goes on the status line under the prompt as plain 
   on('session.surfaces', () => ({ value: ['desktop'] }))
   on('session.id', () => ({ value: 'abc' }))
   on('session.cwd', () => ({ value: '/home/me/OPC' }))
-  on('env.get', () => ({ value: '/home/me' }))
+  on('env.get', (_, e) => ({ value: e.name === 'CTX_DESKTOP_WIDTH' ? '0' : '/home/me' }))
   on('session.repo', () => ({ value: null }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('store.get', () => ({ value: undefined }))
