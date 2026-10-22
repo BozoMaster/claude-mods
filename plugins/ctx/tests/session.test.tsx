@@ -339,13 +339,13 @@ test('a session only the desktop draws has the row on its status line, each chan
   const { statuses } = engine(on, { id: 'desk', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK] })
 
   await $.session.start(DESKTOP_START)
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)'])
+  expect(statuses).toEqual([undefined, '~/proj (main) │ ctx 0% · 0% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)'])
 
   await drain($.turn.step(STEP))
   await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['context'] })
   expect(statuses.slice(2)).toEqual([
-    '~/proj (main) │ 0% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
-    '~/proj (main) │ 12% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
+    '~/proj (main) │ ctx 0% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
+    '~/proj (main) │ ctx 12% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
   ])
 
   // Nothing moved: the line is not set again.
@@ -362,7 +362,7 @@ test('the status line is set once the desktop attaches after the session starts'
 
   surfaces.push('desktop')
   await $.session.attach({ surface: 'desktop', clientId: 'app' })
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit'])
+  expect(statuses).toEqual([undefined, '~/proj (main) │ ctx 0% · 0% hit'])
 })
 
 test('a terminal attaching to a desktop session clears the status line', async ($, on) => {
@@ -372,7 +372,7 @@ test('a terminal attaching to a desktop session clears the status line', async (
   await $.session.start(DESKTOP_START)
   surfaces.push('terminal')
   await $.session.attach({ surface: 'terminal', clientId: 'tty' })
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit', undefined])
+  expect(statuses).toEqual([undefined, '~/proj (main) │ ctx 0% · 0% hit', undefined])
 })
 
 for (const surfaces of [['terminal'], ['terminal', 'desktop']] as const) {
@@ -389,7 +389,7 @@ for (const surfaces of [['terminal'], ['terminal', 'desktop']] as const) {
 test('the plan usage is pushed right by figure spaces to the width set, and a line too long keeps its bar', async ($, on) => {
   const { statuses } = engine(on, { id: 'wide', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK], width: '80' })
   await $.session.start(DESKTOP_START)
-  const left = '~/proj (main) │ 0% · 0% hit'
+  const left = '~/proj (main) │ ctx 0% · 0% hit'
   const right = '5h 7% (4h 10m) · wk 11% (3d 3h)'
   const text = statuses.at(-1) ?? ''
   expect(text).toBe(left + '\u2007'.repeat(80 - [...left].length - right.length) + right)

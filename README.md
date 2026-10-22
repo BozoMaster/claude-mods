@@ -35,7 +35,7 @@ colors, right-aligned by the app, and without the model and its effort, which th
 beside the prompt. A session the terminal draws too keeps its terminal status line as it is.
 
 The app gives a status line no left and right, so the plan usage is pushed right with spaces
-that pad the line to 100 characters. The mod cannot see how wide the window is: if the usage
+that pad the line to 88 characters. The mod cannot see how wide the window is: if the usage
 is cut off, or the gap is too small, set `CTX_DESKTOP_WIDTH` in the `env` block of
 `~/.claude/settings.json` to a smaller or larger count (`0` turns the padding off), and start
 a new session.

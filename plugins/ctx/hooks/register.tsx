@@ -136,8 +136,8 @@ export function line(ps: Part[]): string {
 }
 
 // The desktop app's status line under the prompt is one run of plain text,
-// after the plugin's name, which the app right-aligns: the folder and the
-// session's figures, then the plan usage pushed toward the right by figure
+// after the plugin's name, which the app right-aligns: the folder, then the
+// session's figures after `ctx` as on the terminal, then the plan usage pushed toward the right by figure
 // spaces, which the app does not collapse as it does ordinary ones. They pad
 // the line out to `width` characters of the app's font; a line already that
 // long, or no width, keeps a bar between the two. The app shows the model and
@@ -145,7 +145,7 @@ export function line(ps: Part[]): string {
 export const FIGURE_SPACE = '\u2007'
 
 export function statusLine(p: Place, t: Tokens, windows: Limit[], now: number, width = 0): string {
-  const left = [placeParts({ ...p, model: '' }), parts(t)].map(line).filter(Boolean).join(' │ ')
+  const left = [line(placeParts({ ...p, model: '' })), `ctx ${line(parts(t))}`].filter(Boolean).join(' │ ')
   const right = line(usageParts(windows, now))
   if (!right) return left
   const gap = width - [...left].length - [...right].length
@@ -160,9 +160,10 @@ export function desktopWidth(v: string | undefined): number {
   return v?.trim() && Number.isInteger(n) && n >= 0 ? n : DEFAULT_DESKTOP_WIDTH
 }
 
-// A guess for a full-width window on a 1920-pixel screen; CTX_DESKTOP_WIDTH
-// in the env block of ~/.claude/settings.json overrides it.
-const DEFAULT_DESKTOP_WIDTH = 100
+// Fitted to a full-width window on a 1920-pixel screen, where the line then
+// starts about a third of the way along the prompt; CTX_DESKTOP_WIDTH in the
+// env block of ~/.claude/settings.json overrides it.
+const DEFAULT_DESKTOP_WIDTH = 88
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
