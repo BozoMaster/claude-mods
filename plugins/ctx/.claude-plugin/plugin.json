@@ -1,6 +1,6 @@
 {
   "name": "ctx",
-  "version": "0.6.3",
-  "description": "One row under the prompt: the folder and git branch, the model and its effort, context fill, cache hit and tokens per second on the left, percent used of the 5-hour and weekly limits and the time to each reset on the right, with only what needs a look in color; in the desktop app, the same figures as plain text on the status line under the prompt, without the model, with the plan usage pushed right by spaces",
+  "version": "0.6.4",
+  "description": "One row under the prompt: the folder and git branch, the model and its effort (in the terminal; the desktop app shows them itself), context fill, cache hit and tokens per second on the left, percent used of the 5-hour and weekly limits and the time to each reset on the right, with only what needs a look in color",
   "types": "./types/index.d.ts"
 }

@@ -34,14 +34,11 @@ type Session = {
   cwd?: string
   model?: string
   repo?: boolean
-  surfaces?: ('terminal' | 'desktop')[]
-  width?: string
 }
 
 function engine(on: On, session: Session) {
   const store = new Map<string, unknown>()
   const writes = new Map<string, number>()
-  const statuses: (string | undefined)[] = []
   on('store.get', (_, e) => ({ value: store.get(e.key) }))
   on('store.set', (_, e) => {
     store.set(e.key, e.value)
@@ -54,15 +51,10 @@ function engine(on: On, session: Session) {
     return { value: undefined }
   })
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.status', (_, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  on('session.surfaces', () => ({ value: session.surfaces ?? ['terminal'] }))
-  on('session.attach', (_, e) => ({ clientId: e.clientId }))
+  on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: session.id }))
   on('session.cwd', () => ({ value: session.cwd ?? '/home/me/proj' }))
-  on('env.get', (_, e) => ({ value: e.name === 'CTX_DESKTOP_WIDTH' ? (session.width ?? '0') : '/home/me' }))
+  on('env.get', () => ({ value: '/home/me' }))
   on('session.repo', () => ({
     value: session.repo === false ? null : { root: '/home/me/proj', remote: null, internal: false, name: null },
   }))
@@ -90,7 +82,7 @@ function engine(on: On, session: Session) {
     const { Text } = $.ui.resolve(e)
     return <Text dimColor>{e.props.hint}</Text>
   })
-  return { store, writes, statuses }
+  return { store, writes }
 }
 
 const START = { cwd: '/', surface: 'terminal', isInteractive: true } as const
@@ -331,67 +323,4 @@ test('a reading that changes nothing writes nothing, so the row is not drawn aga
   await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['cost'] })
   expect(await version('place')).toBe(place)
   expect(await version('tokens')).toBe(tokens)
-})
-
-const DESKTOP_START = { cwd: '/', surface: 'desktop', isInteractive: true } as const
-
-test('a session only the desktop draws has the row on its status line, each change once', async ($, on) => {
-  const { statuses } = engine(on, { id: 'desk', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK] })
-
-  await $.session.start(DESKTOP_START)
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)'])
-
-  await drain($.turn.step(STEP))
-  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['context'] })
-  expect(statuses.slice(2)).toEqual([
-    '~/proj (main) │ 0% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
-    '~/proj (main) │ 12% · 99% hit │ 5h 7% (4h 10m) · wk 11% (3d 3h)',
-  ])
-
-  // Nothing moved: the line is not set again.
-  await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['cost'] })
-  expect(statuses).toHaveLength(4)
-})
-
-test('the status line is set once the desktop attaches after the session starts', async ($, on) => {
-  const surfaces: ('terminal' | 'desktop')[] = []
-  const { statuses } = engine(on, { id: 'late', surfaces })
-
-  await $.session.start(DESKTOP_START)
-  expect(statuses).toEqual([undefined])
-
-  surfaces.push('desktop')
-  await $.session.attach({ surface: 'desktop', clientId: 'app' })
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit'])
-})
-
-test('a terminal attaching to a desktop session clears the status line', async ($, on) => {
-  const surfaces: ('terminal' | 'desktop')[] = ['desktop']
-  const { statuses } = engine(on, { id: 'both', surfaces })
-
-  await $.session.start(DESKTOP_START)
-  surfaces.push('terminal')
-  await $.session.attach({ surface: 'terminal', clientId: 'tty' })
-  expect(statuses).toEqual([undefined, '~/proj (main) │ 0% · 0% hit', undefined])
-})
-
-for (const surfaces of [['terminal'], ['terminal', 'desktop']] as const) {
-  test(`a terminal session never sets the status line (${surfaces.join(' and ')} attached)`, async ($, on) => {
-    const { statuses } = engine(on, { id: 'term', surfaces: [...surfaces] })
-    await $.session.start(START)
-    await drain($.turn.step(STEP))
-    await $.session.measure({ context: { window: 1_000_000, percent: 12 }, rateLimits: [], changed: ['context'] })
-    await $.session.attach({ surface: 'desktop', clientId: 'app' })
-    expect(statuses).toEqual([undefined])
-  })
-}
-
-test('the plan usage is pushed right by figure spaces to the width set, and a line too long keeps its bar', async ($, on) => {
-  const { statuses } = engine(on, { id: 'wide', surfaces: ['desktop'], rateLimits: [FIVE_HOUR, WEEK], width: '80' })
-  await $.session.start(DESKTOP_START)
-  const left = '~/proj (main) │ 0% · 0% hit'
-  const right = '5h 7% (4h 10m) · wk 11% (3d 3h)'
-  const text = statuses.at(-1) ?? ''
-  expect(text).toBe(left + '\u2007'.repeat(80 - [...left].length - right.length) + right)
-  expect([...text]).toHaveLength(80)
 })

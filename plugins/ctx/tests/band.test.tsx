@@ -12,7 +12,6 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   // Nothing sits beneath the plugin: each hook here stands for the engine.
   on('session.start', (_, e) => ({ cwd: e.cwd }))
   on('ui.status', () => ({ value: undefined }))
-  on('session.surfaces', () => ({ value: ['terminal'] }))
   on('session.id', () => ({ value: 'abc' }))
   on('session.cwd', () => ({ value: '/home/me/OPC' }))
   on('env.get', () => ({ value: '/home/me' }))
@@ -53,17 +52,25 @@ test('under the prompt: the hint first, then tokens and plan usage, colored wher
   await ui.unmount()
 })
 
-test('on the desktop: the row goes on the status line under the prompt as plain text, without the model', async ($, on) => {
-  const statuses: (string | undefined)[] = []
+const BAND = {
+  plugin: 'ctx',
+  component: 'AbovePrompt',
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 20,
+    bodyColumns: 120,
+    scroll: { offset: 0, bodyRows: 20 },
+    view: {},
+  },
+} as const
+
+test('on the desktop: the row goes in the band above the prompt without the model, and the terminal leaves the band alone', async ($, on) => {
   on('session.start', (_, e) => ({ cwd: e.cwd }))
-  on('ui.status', (_, e) => {
-    statuses.push(e.text)
-    return { value: undefined }
-  })
-  on('session.surfaces', () => ({ value: ['desktop'] }))
+  on('ui.status', () => ({ value: undefined }))
   on('session.id', () => ({ value: 'abc' }))
   on('session.cwd', () => ({ value: '/home/me/OPC' }))
-  on('env.get', (_, e) => ({ value: e.name === 'CTX_DESKTOP_WIDTH' ? '0' : '/home/me' }))
+  on('env.get', () => ({ value: '/home/me' }))
   on('session.repo', () => ({ value: null }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('store.get', () => ({ value: undefined }))
@@ -80,10 +87,6 @@ test('on the desktop: the row goes on the status line under the prompt as plain 
   }))
   on('clock.now', () => ({ value: NOW }))
   on('clock.every', () => ({ value: undefined }))
-  on('ui.render', { component: 'PromptHint' }, ($, e) => {
-    const { Text } = $.ui.resolve(e)
-    return <Text dimColor>{e.props.hint}</Text>
-  })
   // Stands for the engine's own band.
   on('ui.render', { component: 'AbovePrompt' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -91,30 +94,24 @@ test('on the desktop: the row goes on the status line under the prompt as plain 
   })
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
-  // The app shows the model and effort itself, so the line leaves them out.
-  expect(statuses).toEqual([undefined, '~/OPC │ 85% · 0% hit │ 5h 92% (2h 10m) · wk 40% (3d 4h)'])
 
-  // The band above the prompt is the app's again.
-  const band = await $.ui.mount({
-    plugin: 'ctx',
-    component: 'AbovePrompt',
-    props: {
-      hasSurvey: false,
-      isWorking: false,
-      maxRows: 20,
-      bodyColumns: 120,
-      scroll: { offset: 0, bodyRows: 20 },
-      view: {},
-    },
-    surface: 'desktop',
-  })
-  expect(await band.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
-  expect(await band.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
-  await band.unmount()
+  const desk = await $.ui.mount({ ...BAND, surface: 'desktop' })
+  expect((await desk.find({ type: 'Text', text: /^85%$/ }))?.props.color).toBe('error')
+  // The app shows the model and effort itself, so the row leaves them out.
+  expect((await desk.find({ type: 'Text', text: /│ ctx / }))?.text).toBe('~/OPC │ ctx 85% · 0% hit')
+  expect(await desk.find({ type: 'Text', text: /Opus/ })).toBe(undefined)
+  expect((await desk.find({ type: 'Text', text: /^5h 92%$/ }))?.props.color).toBe('error')
+  expect(await desk.find({ type: 'Text', text: /^engine band$/ })).toBe(undefined)
+  await desk.unmount()
 
-  // A desktop hint line, where there is one, is left as it is.
-  const hint = await $.ui.mount({ ...HINT, surface: 'desktop' })
-  expect(await hint.find({ type: 'Text', text: /^auto mode on/ })).not.toBe(undefined)
-  expect(await hint.find({ type: 'Text', text: /ctx/ })).toBe(undefined)
-  await hint.unmount()
+  // A survey keeps the band.
+  const survey = await $.ui.mount({ ...BAND, props: { ...BAND.props, hasSurvey: true }, surface: 'desktop' })
+  expect(await survey.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
+  await survey.unmount()
+
+  // The terminal's band is the engine's: its row stays under the hint line.
+  const term = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await term.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
+  expect(await term.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
+  await term.unmount()
 })

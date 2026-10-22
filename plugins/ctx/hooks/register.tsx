@@ -135,36 +135,6 @@ export function line(ps: Part[]): string {
   return ps.map(p => (p.note ? `${p.text} ${p.note}` : p.text)).join(' · ')
 }
 
-// The desktop app's status line under the prompt is one run of plain text,
-// after the plugin's name, which the app right-aligns and which stands for the
-// terminal's `ctx`: the folder, then the session's figures, then the plan usage pushed toward the right by figure
-// spaces, which the app does not collapse as it does ordinary ones. They pad
-// the line out to `width` characters of the app's font; a line already that
-// long, or no width, keeps a bar between the two. The app shows the model and
-// its effort itself.
-export const FIGURE_SPACE = '\u2007'
-
-export function statusLine(p: Place, t: Tokens, windows: Limit[], now: number, width = 0): string {
-  const left = [placeParts({ ...p, model: '' }), parts(t)].map(line).filter(Boolean).join(' │ ')
-  const right = line(usageParts(windows, now))
-  if (!right) return left
-  const gap = width - [...left].length - [...right].length
-  return gap >= 3 ? left + FIGURE_SPACE.repeat(gap) + right : `${left} │ ${right}`
-}
-
-// The width the desktop status line is padded to, in characters, from
-// CTX_DESKTOP_WIDTH, where 0 turns the padding off; the default where it is
-// unset or not a whole count.
-export function desktopWidth(v: string | undefined): number {
-  const n = Number(v)
-  return v?.trim() && Number.isInteger(n) && n >= 0 ? n : DEFAULT_DESKTOP_WIDTH
-}
-
-// Fitted to a full-width window on a 1920-pixel screen, where the line then
-// starts a little after the mode picker; CTX_DESKTOP_WIDTH in the env block of
-// ~/.claude/settings.json overrides it.
-const DEFAULT_DESKTOP_WIDTH = 104
-
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
 // What the store holds is a file on disk: read back only what has the right shape.
@@ -208,29 +178,6 @@ let lastEffort: string | undefined
 
 // HOME, read once per load of the module.
 let home: Promise<string | undefined> | undefined
-
-// The text last set on the status line, so an unchanged one is not set again.
-let lastStatus: string | undefined
-
-// CTX_DESKTOP_WIDTH, read once per load of the module.
-let width: Promise<string | undefined> | undefined
-
-// The desktop app draws no hint line under the prompt in a local session, but
-// does draw a plugin's status line there: in a session only the desktop
-// draws, the row goes there as plain text. A terminal's status line is left
-// alone, and cleared if the row was set before a terminal attached.
-async function status($: Engine) {
-  const surfaces = await $.session.surfaces()
-  let text: string | undefined
-  if (surfaces.includes('desktop') && !surfaces.includes('terminal')) {
-    const { windows, now } = await read($, limits)
-    width ??= $.env.get('CTX_DESKTOP_WIDTH')
-    text = statusLine(await read($, place), await read($, tokens), windows, now, desktopWidth(await width))
-  }
-  if (text === lastStatus) return
-  $.ui.status(text)
-  lastStatus = text
-}
 
 // Writes `next` over the place only where it differs: every write of a value
 // the row reads draws the row again.
@@ -303,7 +250,6 @@ async function follow($: Engine): Promise<boolean> {
   if (id === loadedId) return false
   await load($, id)
   await locate($)
-  await status($)
   return true
 }
 
@@ -332,10 +278,9 @@ async function prune($: Engine, id: string) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // Whatever an earlier load left on the status line goes; status() below
-    // sets it again where the desktop alone draws the session.
+    // Earlier versions pinned the figures as a status line, which cannot be
+    // colored; they now live under the prompt's hint line instead.
     $.ui.status(undefined)
-    lastStatus = undefined
     const id = await $.session.id()
     // A hot reload keeps the session's state, which is newer than the store.
     // Otherwise a resumed session has no fill until its first response, so
@@ -344,18 +289,15 @@ export const register: Register = on => {
     if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
     else await load($, id, (await $.session.usage()).context.percent)
     await locate($)
-    await status($)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
     $.clock.every(60_000, async () => {
       if (!(await follow($))) await locate($)
       // Off a subscription there are no countdowns to move on.
-      if ((await read($, limits)).windows.length > 0) {
-        const now = await $.clock.now()
-        await update($, limits, l => ({ ...l, now }))
-      }
-      await status($)
+      if ((await read($, limits)).windows.length === 0) return
+      const now = await $.clock.now()
+      await update($, limits, l => ({ ...l, now }))
     })
     await prune($, id)
     return next(e)
@@ -383,7 +325,6 @@ export const register: Register = on => {
         // A short or empty step keeps the last reading instead of blanking it.
         tps: rate(usage.output_tokens, elapsed) || t.tps,
       }))
-      await status($)
     }
     return step
   })
@@ -404,16 +345,7 @@ export const register: Register = on => {
     }
     await save($, await $.session.id())
     if (!followed) await locate($)
-    await status($)
     return next(e)
-  })
-
-  // The desktop app attaches after the session starts, and a terminal may
-  // attach to a desktop session: the status line follows either.
-  on('session.attach', async ($, e, next) => {
-    const result = await next(e)
-    await status($)
-    return result
   })
 
   // Saved as the session ends too: exit, /clear, a resume. The process goes
@@ -425,11 +357,9 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The terminal's hint line under the prompt, then the row beneath it. The
-  // desktop app's hint line is plain text, so there the status line has it.
+  // The engine's hint line under the prompt, then the row beneath it.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hint = await next(e)
-    if (e.surface === 'desktop') return hint
     const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
@@ -438,14 +368,25 @@ export const register: Register = on => {
       </Box>
     )
   })
+
+  // The desktop app draws no hint line under the prompt in a local session,
+  // so there the same row goes in the band above the prompt instead, giving
+  // way to a survey. The terminal leaves the band alone.
+  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
+    return row($, e)
+  })
 }
 
 // One row, redrawn whenever its values change: where the session is and the
 // model, then the session's figures, on the left; plan usage on the right.
-async function row($: Engine, e: RenderInput<'PromptHint'>) {
+// The desktop app shows the model and its effort beside the prompt already,
+// so there the row leaves them out.
+async function row($: Engine, e: RenderInput<'PromptHint' | 'AbovePrompt'>) {
   const { Box, Text } = $.ui.resolve(e)
   const { windows, now } = await read($, limits)
-  const at = placeParts(await read($, place))
+  const p = await read($, place)
+  const at = placeParts(e.surface === 'desktop' ? { ...p, model: '' } : p)
   const left = parts(await read($, tokens))
   const right = usageParts(windows, now)
 
