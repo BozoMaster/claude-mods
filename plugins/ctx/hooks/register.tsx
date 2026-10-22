@@ -135,6 +135,16 @@ export function line(ps: Part[]): string {
   return ps.map(p => (p.note ? `${p.text} ${p.note}` : p.text)).join(' · ')
 }
 
+// The desktop app's status line under the prompt is one run of plain text,
+// after the plugin's name: the folder, the session's figures and the plan
+// usage, split by bars. The app shows the model and its effort itself.
+export function statusLine(p: Place, t: Tokens, windows: Limit[], now: number): string {
+  return [placeParts({ ...p, model: '' }), parts(t), usageParts(windows, now)]
+    .filter(ps => ps.length > 0)
+    .map(line)
+    .join(' │ ')
+}
+
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0
 
 // What the store holds is a file on disk: read back only what has the right shape.
@@ -178,6 +188,25 @@ let lastEffort: string | undefined
 
 // HOME, read once per load of the module.
 let home: Promise<string | undefined> | undefined
+
+// The text last set on the status line, so an unchanged one is not set again.
+let lastStatus: string | undefined
+
+// The desktop app draws no hint line under the prompt in a local session, but
+// does draw a plugin's status line there: in a session only the desktop
+// draws, the row goes there as plain text. A terminal's status line is left
+// alone, and cleared if the row was set before a terminal attached.
+async function status($: Engine) {
+  const surfaces = await $.session.surfaces()
+  let text: string | undefined
+  if (surfaces.includes('desktop') && !surfaces.includes('terminal')) {
+    const { windows, now } = await read($, limits)
+    text = statusLine(await read($, place), await read($, tokens), windows, now)
+  }
+  if (text === lastStatus) return
+  $.ui.status(text)
+  lastStatus = text
+}
 
 // Writes `next` over the place only where it differs: every write of a value
 // the row reads draws the row again.
@@ -250,6 +279,7 @@ async function follow($: Engine): Promise<boolean> {
   if (id === loadedId) return false
   await load($, id)
   await locate($)
+  await status($)
   return true
 }
 
@@ -278,9 +308,10 @@ async function prune($: Engine, id: string) {
 
 export const register: Register = on => {
   on('session.start', async ($, e, next) => {
-    // Earlier versions pinned the figures as a status line, which cannot be
-    // colored; they now live under the prompt's hint line instead.
+    // Whatever an earlier load left on the status line goes; status() below
+    // sets it again where the desktop alone draws the session.
     $.ui.status(undefined)
+    lastStatus = undefined
     const id = await $.session.id()
     // A hot reload keeps the session's state, which is newer than the store.
     // Otherwise a resumed session has no fill until its first response, so
@@ -289,15 +320,18 @@ export const register: Register = on => {
     if (t.input + t.output + t.cacheRead + t.cacheWrite > 0) loadedId = id
     else await load($, id, (await $.session.usage()).context.percent)
     await locate($)
+    await status($)
 
     // The windows change with responses; once a minute the clock moves on,
     // so the countdowns do too while the session sits idle.
     $.clock.every(60_000, async () => {
       if (!(await follow($))) await locate($)
       // Off a subscription there are no countdowns to move on.
-      if ((await read($, limits)).windows.length === 0) return
-      const now = await $.clock.now()
-      await update($, limits, l => ({ ...l, now }))
+      if ((await read($, limits)).windows.length > 0) {
+        const now = await $.clock.now()
+        await update($, limits, l => ({ ...l, now }))
+      }
+      await status($)
     })
     await prune($, id)
     return next(e)
@@ -325,6 +359,7 @@ export const register: Register = on => {
         // A short or empty step keeps the last reading instead of blanking it.
         tps: rate(usage.output_tokens, elapsed) || t.tps,
       }))
+      await status($)
     }
     return step
   })
@@ -345,7 +380,16 @@ export const register: Register = on => {
     }
     await save($, await $.session.id())
     if (!followed) await locate($)
+    await status($)
     return next(e)
+  })
+
+  // The desktop app attaches after the session starts, and a terminal may
+  // attach to a desktop session: the status line follows either.
+  on('session.attach', async ($, e, next) => {
+    const result = await next(e)
+    await status($)
+    return result
   })
 
   // Saved as the session ends too: exit, /clear, a resume. The process goes
@@ -357,9 +401,11 @@ export const register: Register = on => {
     return next(e)
   })
 
-  // The engine's hint line under the prompt, then the row beneath it.
+  // The terminal's hint line under the prompt, then the row beneath it. The
+  // desktop app's hint line is plain text, so there the status line has it.
   on('ui.render', { component: 'PromptHint' }, async ($, e, next) => {
     const hint = await next(e)
+    if (e.surface === 'desktop') return hint
     const { Box } = $.ui.resolve(e)
     return (
       <Box flexDirection="column">
@@ -368,25 +414,14 @@ export const register: Register = on => {
       </Box>
     )
   })
-
-  // The desktop app draws no hint line under the prompt in a local session,
-  // so there the same row goes in the band above the prompt instead, giving
-  // way to a survey. The terminal leaves the band alone.
-  on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
-    if (e.surface !== 'desktop' || e.props.hasSurvey) return next(e)
-    return row($, e)
-  })
 }
 
 // One row, redrawn whenever its values change: where the session is and the
 // model, then the session's figures, on the left; plan usage on the right.
-// The desktop app shows the model and its effort beside the prompt already,
-// so there the row leaves them out.
-async function row($: Engine, e: RenderInput<'PromptHint' | 'AbovePrompt'>) {
+async function row($: Engine, e: RenderInput<'PromptHint'>) {
   const { Box, Text } = $.ui.resolve(e)
   const { windows, now } = await read($, limits)
-  const p = await read($, place)
-  const at = placeParts(e.surface === 'desktop' ? { ...p, model: '' } : p)
+  const at = placeParts(await read($, place))
   const left = parts(await read($, tokens))
   const right = usageParts(windows, now)
 
