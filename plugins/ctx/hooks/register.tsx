@@ -63,6 +63,38 @@ export function shortDir(dir: string, home?: string): string {
   return dir.startsWith(home + '/') ? '~' + dir.slice(home.length) : dir
 }
 
+// A session the desktop app started without a folder runs in a throwaway
+// workspace under the app's own data folder (`…/Claude/scratch-workspaces/`
+// on every platform), which the app shows as "No folder": its long path says
+// nothing, so the row shows no folder for it. A project of the person's that
+// merely has the word in its path is not one.
+export function isScratch(dir: string): boolean {
+  return /[\\/]Claude[\\/]scratch-workspaces[\\/]/.test(dir)
+}
+
+// The row is one line cut at its end, so a long folder or branch would push
+// the figures out of it. Lengths count characters, never half of one.
+const DIR_MAX = 40
+const BRANCH_MAX = 24
+
+// Past `max` characters a folder loses its head and keeps whole trailing
+// segments where it can, `…/deep/nested/project`; a last segment longer
+// than the room keeps its own tail.
+export function clipDir(dir: string, max = DIR_MAX): string {
+  const chars = Array.from(dir)
+  if (chars.length <= max) return dir
+  const tail = chars.slice(chars.length - (max - 1))
+  const cut = tail.findIndex(c => c === '/' || c === '\\')
+  return '…' + (cut >= 0 && cut < tail.length - 1 ? tail.slice(cut) : tail).join('')
+}
+
+// Past `max` characters a branch keeps its head, where its kind and ticket
+// usually are: `feature/PROJ-1234-…`.
+export function clipBranch(branch: string, max = BRANCH_MAX): string {
+  const chars = Array.from(branch)
+  return chars.length <= max ? branch : chars.slice(0, max - 1).join('') + '…'
+}
+
 // Output tokens per second over one model request; 0 when it is too short to mean anything.
 export function rate(outputTokens: number, ms: number): number {
   return ms >= 200 && outputTokens > 0 ? Math.round(outputTokens / (ms / 1000)) : 0
@@ -236,8 +268,11 @@ async function branch($: Engine): Promise<string | undefined> {
 // directory shows soon after.
 async function locate($: Engine) {
   home ??= $.env.get('HOME')
-  const [cwd, h, b, model] = await Promise.all([$.session.cwd(), home, branch($), $.session.model()])
-  await setPlace($, { dir: shortDir(cwd, h), branch: b, model })
+  const [cwd, h, model] = await Promise.all([$.session.cwd(), home, $.session.model()])
+  // No folder is shown for a scratch workspace, so no branch is looked up.
+  if (isScratch(cwd)) return setPlace($, { dir: '', branch: undefined, model })
+  const b = await branch($)
+  await setPlace($, { dir: clipDir(shortDir(cwd, h)), branch: b === undefined ? undefined : clipBranch(b), model })
 }
 
 // A /clear or an in-app resume goes on under another session id with no

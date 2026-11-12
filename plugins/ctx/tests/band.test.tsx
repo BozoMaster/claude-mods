@@ -1,4 +1,5 @@
 import { expect, test } from 'claude-code/testing'
+import type { On } from 'claude-code'
 
 const HINT = {
   plugin: 'ctx',
@@ -57,6 +58,7 @@ const BAND = {
   component: 'AbovePrompt',
   props: {
     hasSurvey: false,
+    isCollapsed: false,
     isWorking: false,
     maxRows: 20,
     bodyColumns: 120,
@@ -114,4 +116,75 @@ test('on the desktop: the row goes in the band above the prompt without the mode
   expect(await term.find({ type: 'Text', text: /^engine band$/ })).not.toBe(undefined)
   expect(await term.find({ type: 'Text', text: /^85%$/ })).toBe(undefined)
   await term.unmount()
+})
+
+// The engine as one session in a given folder: the git branch it reports
+// and how many times it was asked for one.
+function folder(on: On, cwd: string, gitBranch?: string) {
+  const runs = { count: 0 }
+  on('session.start', (_, e) => ({ cwd: e.cwd }))
+  on('ui.status', () => ({ value: undefined }))
+  on('session.id', () => ({ value: 'abc' }))
+  on('session.cwd', () => ({ value: cwd }))
+  on('env.get', () => ({ value: '/home/me' }))
+  on('session.repo', () => ({
+    value: gitBranch ? { root: cwd, remote: null, internal: false, name: null } : null,
+  }))
+  on('process.run', () => {
+    runs.count++
+    return {
+      value: { exitCode: 0, stdout: `${gitBranch}\n`, stderr: '', isStdoutTruncated: false, isStderrTruncated: false },
+    }
+  })
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('store.get', () => ({ value: undefined }))
+  on('store.keys', () => ({ value: [] }))
+  on('session.usage', () => ({
+    value: {
+      startedAt: NOW,
+      context: { tokens: 70_000, window: 1_000_000, percent: 7 },
+      rateLimits: [
+        { kind: 'five_hour', percentUsed: 12, resetsAt: '2026-10-20T14:10:00Z' },
+        { kind: 'seven_day', percentUsed: 40, resetsAt: '2026-10-23T16:00:00Z' },
+      ],
+    },
+  }))
+  on('clock.now', () => ({ value: NOW }))
+  on('clock.every', () => ({ value: undefined }))
+  on('ui.render', { component: 'PromptHint' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text dimColor>{e.props.hint}</Text>
+  })
+  return runs
+}
+
+const SCRATCH =
+  '/home/me/.config/Claude/scratch-workspaces/fe0ea591-7182-443a-b8ad-6c450b8ae7b0/b06c281c-b715-4635-aceb-84b5c11568ca/scratch-2026-11-12-02abf8'
+
+test('a desktop session with no folder shows its figures and usage, with no path and no git lookup', async ($, on) => {
+  const runs = folder(on, SCRATCH)
+  await $.session.start({ cwd: SCRATCH, surface: 'desktop', isInteractive: true })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(surface === 'desktop' ? { ...BAND, surface } : { ...HINT, surface })
+    const row = await ui.find({ type: 'Text', text: /ctx / })
+    expect(row?.text.startsWith(surface === 'desktop' ? 'ctx 7% · 0% hit' : 'Opus 5.5 │ ctx 7% · 0% hit')).toBe(true)
+    expect(row?.text).not.toContain('scratch')
+    expect(await ui.find({ type: 'Text', text: /5h 12% \(2h 10m\) · wk 40% \(3d 4h\)/ })).not.toBe(undefined)
+    await ui.unmount()
+  }
+  expect(runs.count).toBe(0)
+})
+
+test('a deep folder on a long branch still leaves room for the figures', async ($, on) => {
+  folder(on, '/home/me/work/clients/acme/monorepo/packages/frontend/web-app', 'feature/PROJ-1234-rework-the-whole-billing-flow')
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  for (const surface of ['desktop', 'terminal'] as const) {
+    const ui = await $.ui.mount(surface === 'desktop' ? { ...BAND, surface } : { ...HINT, surface })
+    const place = '…/monorepo/packages/frontend/web-app (feature/PROJ-1234-rewor…)'
+    expect((await ui.find({ type: 'Text', text: /│ ctx / }))?.text).toBe(
+      surface === 'desktop' ? `${place} │ ctx 7% · 0% hit` : `${place} · Opus 5.5 │ ctx 7% · 0% hit`,
+    )
+    expect(await ui.find({ type: 'Text', text: /5h 12% \(2h 10m\) · wk 40% \(3d 4h\)/ })).not.toBe(undefined)
+    await ui.unmount()
+  }
 })

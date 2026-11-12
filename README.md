@@ -22,6 +22,9 @@ The effort is the one the last main-conversation request was sent with, so a new
 shows it from the first reply on, and a `/model` or `/effort` change shows after the next
 one; it carries over a `/clear` or a resume. The folder, branch and model are read again on
 a `/clear` or a resume, after every reply and once a minute.
+A folder longer than 40 characters keeps only its last segments (`…/packages/frontend/web-app`)
+and a branch longer than 24 keeps its head (`feature/PROJ-1234-rewor…`), so the figures always
+fit; a desktop session started with no folder shows none.
 
 The figures are saved as you go, so a resumed session opens on its own totals and context
 fill rather than zeros, and the last plan usage reading shows in any session until the

@@ -10,6 +10,9 @@ import {
   parts,
   placeParts,
   rate,
+  clipBranch,
+  clipDir,
+  isScratch,
   shortDir,
   stale,
   until,
@@ -169,4 +172,35 @@ test('pruning keeps the newest sessions and names the rest', () => {
   expect(stale(saved, 2)).toEqual(['a'])
   expect(stale(saved, 3)).toEqual([])
   expect(stale(saved, 0)).toEqual(['b', 'c', 'a'])
+})
+
+test('the desktop app\'s scratch workspace is told apart from a folder that only has the word', () => {
+  expect(isScratch('/home/me/.config/Claude/scratch-workspaces/a/b/scratch-2026-11-12-02abf8')).toBe(true)
+  expect(isScratch('/Users/me/Library/Application Support/Claude/scratch-workspaces/a/b/s')).toBe(true)
+  expect(isScratch('C:\\Users\\me\\AppData\\Roaming\\Claude\\scratch-workspaces\\a\\s')).toBe(true)
+  expect(isScratch('/home/me/OPC')).toBe(false)
+  expect(isScratch('/home/me/code/scratch-workspaces/demo')).toBe(false)
+})
+
+test('a long folder keeps whole trailing segments, so the figures still fit', () => {
+  expect(clipDir('~/OPC')).toBe('~/OPC')
+  expect(clipDir('~/work/clients/acme/monorepo/packages/frontend/web-app')).toBe('…/monorepo/packages/frontend/web-app')
+  expect(clipDir('C:\\work\\clients\\acme\\monorepo\\packages\\frontend\\web-app')).toBe('…\\monorepo\\packages\\frontend\\web-app')
+  // A last segment longer than the room keeps its own tail.
+  const huge = '~/' + 'x'.repeat(60)
+  expect(Array.from(clipDir(huge)).length).toBe(40)
+  expect(clipDir(huge).endsWith('x')).toBe(true)
+  // Exactly the limit is left alone.
+  const exact = '~/' + 'y'.repeat(38)
+  expect(clipDir(exact)).toBe(exact)
+  // An emoji is never cut in half.
+  const emoji = '~/' + '📁'.repeat(50)
+  expect(Array.from(clipDir(emoji)).every(c => c === '…' || c === '📁')).toBe(true)
+  expect(Array.from(clipDir(emoji)).length).toBe(40)
+})
+
+test('a long branch keeps its head', () => {
+  expect(clipBranch('main')).toBe('main')
+  expect(clipBranch('feature/PROJ-1234-rework-the-whole-billing-flow')).toBe('feature/PROJ-1234-rewor…')
+  expect(Array.from(clipBranch('feature/PROJ-1234-rework-the-whole-billing-flow')).length).toBe(24)
 })
