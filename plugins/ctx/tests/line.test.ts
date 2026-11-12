@@ -10,6 +10,8 @@ import {
   parts,
   placeParts,
   rate,
+  clipDir,
+  isScratch,
   shortDir,
   stale,
   until,
@@ -169,4 +171,18 @@ test('pruning keeps the newest sessions and names the rest', () => {
   expect(stale(saved, 2)).toEqual(['a'])
   expect(stale(saved, 3)).toEqual([])
   expect(stale(saved, 0)).toEqual(['b', 'c', 'a'])
+})
+
+test('a desktop session with no folder is told by its scratch workspace', () => {
+  expect(isScratch('/home/me/.config/Claude/scratch-workspaces/a/b/scratch-2026-11-12-02abf8')).toBe(true)
+  expect(isScratch('/home/me/OPC')).toBe(false)
+})
+
+test('a long folder keeps its last segments, so the figures still fit', () => {
+  expect(clipDir('~/OPC')).toBe('~/OPC')
+  const long = '~/work/clients/acme/monorepo/packages/frontend/web-app'
+  const clipped = clipDir(long)
+  expect(clipped.length <= 40).toBe(true)
+  expect(clipped).toBe('…/monorepo/packages/frontend/web-app')
+  expect(clipDir('~/' + 'x'.repeat(60)).length).toBe(40)
 })

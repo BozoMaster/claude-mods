@@ -63,6 +63,24 @@ export function shortDir(dir: string, home?: string): string {
   return dir.startsWith(home + '/') ? '~' + dir.slice(home.length) : dir
 }
 
+// A session the desktop app started without a folder runs in a throwaway
+// workspace the app shows as "No folder": its long path says nothing, so the
+// row shows no folder for it.
+export function isScratch(dir: string): boolean {
+  return dir.includes('/scratch-workspaces/')
+}
+
+// The row is one line cut at its end, so a long folder would push the
+// figures out of it: past `max` characters the folder loses its head and
+// keeps its last segments, `…/deep/nested/project`.
+const DIR_MAX = 40
+export function clipDir(dir: string, max = DIR_MAX): string {
+  if (dir.length <= max) return dir
+  const tail = dir.slice(dir.length - (max - 1))
+  const cut = tail.indexOf('/')
+  return '…' + (cut >= 0 && cut < tail.length - 1 ? tail.slice(cut) : tail)
+}
+
 // Output tokens per second over one model request; 0 when it is too short to mean anything.
 export function rate(outputTokens: number, ms: number): number {
   return ms >= 200 && outputTokens > 0 ? Math.round(outputTokens / (ms / 1000)) : 0
@@ -237,7 +255,10 @@ async function branch($: Engine): Promise<string | undefined> {
 async function locate($: Engine) {
   home ??= $.env.get('HOME')
   const [cwd, h, b, model] = await Promise.all([$.session.cwd(), home, branch($), $.session.model()])
-  await setPlace($, { dir: shortDir(cwd, h), branch: b, model })
+  await setPlace(
+    $,
+    isScratch(cwd) ? { dir: '', branch: undefined, model } : { dir: clipDir(shortDir(cwd, h)), branch: b, model },
+  )
 }
 
 // A /clear or an in-app resume goes on under another session id with no
